@@ -37,3 +37,6 @@ build/
 application-local.yml
 .env
 *.log
+
+### 本地文档（含开发交接材料），按作者决定不入库 ###
+docs/

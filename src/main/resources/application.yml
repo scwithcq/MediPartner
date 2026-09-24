@@ -10,6 +10,11 @@ spring:
     multipart:
       max-file-size: 20MB
       max-request-size: 20MB
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:medi}
+    password: ${RABBITMQ_PASSWORD:medi123}
 
 server:
   port: 8080
@@ -31,6 +36,43 @@ medi:
     max-active-orders-low-credit: 1
     min-credit-accept: 60
     low-credit-threshold: 80
+  file:
+    # 本地 OSS 存储根目录（阶段 8 换 MinIO/OSS 时仅改实现）
+    base-dir: ${MEDI_FILE_BASE_DIR:./data/files}
+  mq:
+    # async=进程内 @Async（默认，无需 RabbitMQ）；rabbit=真实消息队列（docker compose up -d rabbitmq 后切换）
+    type: ${MEDI_MQ_TYPE:async}
+  knowledge:
+    # 启动时自动导入 classpath:knowledge/*.md 内置语料
+    auto-seed: true
+    split-max-chars: 500
+    split-overlap: 50
+  ai:
+    # 模型厂商：deepseek（默认，DeepSeek 官方 OpenAI 兼容模式，无 Embedding 接口时检索降级关键词打分）
+    #          / qwen（DashScope OpenAI 兼容模式）/ zhipu（智谱原生）
+    provider: ${MEDI_AI_PROVIDER:deepseek}
+    top-k: 3
+    max-regenerate: 5
+    deepseek:
+      base-url: https://api.deepseek.com
+      # DeepSeek 官方平台 Key；复用用户环境变量 SILICONFLOW_API_KEY，可用 MEDI_AI_DEEPSEEK_API_KEY 覆盖
+      api-key: ${MEDI_AI_DEEPSEEK_API_KEY:${SILICONFLOW_API_KEY:}}
+      chat-model: deepseek-flash
+      temperature: 0.3
+    qwen:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      # API Key 只从环境变量注入，禁止写死
+      api-key: ${MEDI_AI_QWEN_API_KEY:}
+      chat-model: qwen-plus
+      embedding-model: text-embedding-v4
+      embedding-dimensions: 1024
+      temperature: 0.3
+    zhipu:
+      base-url: https://open.bigmodel.cn/api/paas
+      api-key: ${MEDI_AI_ZHIPU_API_KEY:}
+      chat-model: glm-4-flash
+      embedding-model: embedding-2
+      temperature: 0.3
 
 springdoc:
   swagger-ui:

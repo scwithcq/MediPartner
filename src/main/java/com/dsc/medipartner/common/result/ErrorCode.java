@@ -12,6 +12,7 @@ public enum ErrorCode {
     UNAUTHORIZED(1002, "未登录或登录已过期"),
     FORBIDDEN(1003, "无权限访问"),
     TOKEN_EXPIRED(1004, "登录已过期，请重新登录"),
+    REPEAT_REQUEST(1005, "请求过于频繁，请稍后再试"),
     USER_NOT_FOUND(2001, "用户不存在"),
 
     ORDER_NOT_FOUND(3001, "订单不存在"),
@@ -25,7 +26,18 @@ public enum ErrorCode {
     WALLET_ACCOUNT_NOT_FOUND(4004, "钱包账户不存在"),
     WALLET_UPDATE_CONFLICT(4005, "钱包更新冲突，请重试"),
 
-    SYSTEM_ERROR(9001, "系统异常，请稍后重试");
+    TICKET_NOT_FOUND(5001, "工单不存在"),
+
+    KNOWLEDGE_NOT_PUBLISHED(6001, "知识库尚未发布，AI 能力不可用"),
+    LLM_CALL_FAILED(6002, "AI 服务暂不可用，请稍后重试"),
+    DOC_PARSE_FAILED(6003, "文档解析失败"),
+    DEMAND_CLOSED(6005, "该需求工单已关闭，请重新发起"),
+
+    FILE_EMPTY(8001, "上传文件为空"),
+    FILE_STORE_FAILED(8005, "文件存储失败，请重试"),
+
+    SYSTEM_ERROR(9001, "系统异常，请稍后重试"),
+    EXTERNAL_TIMEOUT(9002, "外部服务超时");
 
     private final int code;
     private final String message;

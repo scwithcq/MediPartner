@@ -20,7 +20,22 @@
         <jjwt.version>0.12.6</jjwt.version>
         <spring-statemachine.version>4.0.1</spring-statemachine.version>
         <springdoc.version>2.8.6</springdoc.version>
+        <spring-ai.version>1.1.8</spring-ai.version>
+        <pdfbox.version>3.0.8</pdfbox.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Spring AI BOM：统一管理 spring-ai-* 模块版本（与 Boot 3.5.x 配套的是 1.1.x 线） -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -77,6 +92,41 @@
             <groupId>org.springframework.statemachine</groupId>
             <artifactId>spring-statemachine-core</artifactId>
             <version>${spring-statemachine.version}</version>
+        </dependency>
+
+        <!-- AI：通义千问走 DashScope OpenAI 兼容模式（spring-ai-openai），智谱走原生模块（spring-ai-zhipuai）。
+             刻意不引 starter，避免自动装配在无 API Key 时抢跑；模型实例由 ChatModelFactory 手工构建 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-zhipuai</artifactId>
+        </dependency>
+        <!-- SimpleVectorStore：课设规模语料的进程内向量库 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-vector-store</artifactId>
+        </dependency>
+        <!-- spring-ai-openai 构造 OpenAiApi 时会急切创建 WebClient；其默认的 JDK HttpClient 连接器
+             依赖 NIO Selector 的 AF_UNIX 环回管道，在部分 Windows 机器（安全软件挂钩 Winsock）上必崩。
+             引入 reactor-netty-http 让 WebClient 改用惰性初始化的 Netty 连接器（与 TomcatProtocolConfig 的
+             NIO2 规避同源）；实际模型调用走 RestClient/HttpURLConnection，不经过该 WebClient -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+        </dependency>
+        <!-- 知识库 PDF 解析 -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
+        </dependency>
+        <!-- 文档解析异步化：默认走进程内 @Async（medi.mq.type=async），切 rabbit 后启用 AMQP 收发 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
         <dependency>

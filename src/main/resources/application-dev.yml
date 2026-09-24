@@ -8,3 +8,5 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+    # 允许补跑小号段迁移（如 V8.1 在 V8 已应用后加入）
+    out-of-order: true

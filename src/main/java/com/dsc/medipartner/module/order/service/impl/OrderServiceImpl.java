@@ -46,6 +46,7 @@ import com.dsc.medipartner.module.user.service.WorkerService;
 import com.dsc.medipartner.module.wallet.service.WalletService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -101,12 +102,17 @@ public class OrderServiceImpl implements OrderService {
     @Value("${medi.order.low-credit-threshold:80}")
     private int lowCreditThreshold;
 
+    /**
+     * {@code reviewService} 用 {@link Lazy} 注入：ReviewServiceImpl 需要 OrderService 校验订单状态，
+     * 而订单列表要查评价状态来算 actions[]，两者构成环。用 @Lazy 让 Spring 注入代理、
+     * 首次真正调用时才解析，避免启动期循环依赖（Servlet 容器默认禁止环）。
+     */
     public OrderServiceImpl(ServiceOrderMapper orderMapper, WalletService walletService,
                             WorkerService workerService, OrderStateMachineService stateMachineService,
                             TraceService traceService, ReportTaskPublisher reportTaskPublisher,
                             DemandService demandService, CreditService creditService,
                             PriceService priceService, UserService userService,
-                            ReviewService reviewService, ActionResolver actionResolver,
+                            @Lazy ReviewService reviewService, ActionResolver actionResolver,
                             OrderAssembler orderAssembler, VirtualPhoneService virtualPhoneService,
                             OrderStatusLogService statusLogService) {
         this.orderMapper = orderMapper;

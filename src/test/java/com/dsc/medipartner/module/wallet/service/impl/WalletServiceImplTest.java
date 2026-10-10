@@ -1,6 +1,7 @@
 package com.dsc.medipartner.module.wallet.service.impl;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
@@ -66,31 +67,21 @@ class WalletServiceImplTest {
     }
 
     /**
-     * selectOne dispatch by the user id embedded in the query wrapper's parameter map, so that a
-     * retry re-reading the same account keeps returning that account. settle queries the user
-     * account and the worker account; single-account operations only ever ask for one.
-     * Callers pass the user id as the first typed parameter of the wrapper.
+     * Stub account reads. settle reads the user account first (settleUserSide) then the worker
+     * account (settleWorkerSide); single-account operations (freeze/unfreeze/refund) only ever ask
+     * once, so they always get the user account. Each answer builds a fresh object so a retry
+     * re-reading the same account sees the same initial state rather than an already-updated one.
      */
     private void stubAccounts(String userBalance, String userFrozen, String workerBalance) {
-        when(accountMapper.selectOne(any())).thenAnswer(invocation -> {
-            Long userId = extractUserId(invocation.getArgument(0));
-            if (userId != null && userId == WORKER_ID) {
-                return account(WORKER_ID, workerBalance, "0.00", 0);
-            }
-            return account(USER_ID, userBalance, userFrozen, 0);
-        });
+        when(accountMapper.selectOne(any()))
+                .thenAnswer(invocation -> account(USER_ID, userBalance, userFrozen, 0))
+                .thenAnswer(invocation -> account(WORKER_ID, workerBalance, "0.00", 0));
     }
 
-    /** Pull the first Long value out of the MyBatis-Plus wrapper's parameter map. */
-    private Long extractUserId(Object wrapper) {
-        if (wrapper instanceof com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?> w) {
-            for (Object value : w.getParamNameValuePairs().values()) {
-                if (value instanceof Long id) {
-                    return id;
-                }
-            }
-        }
-        return null;
+    /** Stub a single-account read (freeze / unfreeze / refund paths). */
+    private void stubSingleAccount(String balance, String frozen) {
+        when(accountMapper.selectOne(any()))
+                .thenAnswer(invocation -> account(USER_ID, balance, frozen, 0));
     }
 
     // ---------------- H-3: duplicate settlement guard ----------------
@@ -133,7 +124,11 @@ class WalletServiceImplTest {
     @Test
     void settleRetriesUserSideOnOptimisticLockConflict() {
         when(transactionMapper.selectCount(any())).thenReturn(0L);
-        stubAccounts("500.00", "200.00", "100.00");
+        // user read, user re-read on retry, then the worker read
+        when(accountMapper.selectOne(any()))
+                .thenAnswer(inv -> account(USER_ID, "500.00", "200.00", 0))
+                .thenAnswer(inv -> account(USER_ID, "500.00", "200.00", 0))
+                .thenAnswer(inv -> account(WORKER_ID, "100.00", "0.00", 0));
         when(accountMapper.update(any(), any())).thenReturn(0, 1, 1);
 
         service.settle(ORDER_NO, USER_ID, WORKER_ID, new BigDecimal("200.00"));
@@ -244,5 +239,87 @@ class WalletServiceImplTest {
         assertThatThrownBy(() -> service.refund(USER_ID, ORDER_NO, new BigDecimal("200.00")))
                 .isInstanceOfSatisfying(BizException.class,
                         e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WALLET_TXN_DUPLICATE));
+    }
+
+    // ---------------- V14 / H-13: cumulative counters ----------------
+
+    /** Settlement bumps cumulative income/expense, which only ever grow (contract 3.6). */
+    @Test
+    void settleAccumulatesTotals() {
+        when(transactionMapper.selectCount(any())).thenReturn(0L);
+        // settleUserSide runs first and reads the user account, then settleWorkerSide reads the worker.
+        // Each call returns a fresh object so a retry cannot see stale state.
+        when(accountMapper.selectOne(any())).thenAnswer(inv -> {
+            WalletAccount u = account(USER_ID, "500.00", "200.00", 0);
+            u.setTotalExpense(new BigDecimal("50.00"));
+            return u;
+        }).thenAnswer(inv -> {
+            WalletAccount w = account(WORKER_ID, "100.00", "0.00", 0);
+            w.setTotalIncome(new BigDecimal("300.00"));
+            return w;
+        });
+        when(accountMapper.update(any(), any())).thenReturn(1);
+
+        service.settle(ORDER_NO, USER_ID, WORKER_ID, new BigDecimal("200.00"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaUpdateWrapper<WalletAccount>> captor =
+                ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(accountMapper, times(2)).update(isNull(), captor.capture());
+
+        // First update is the user side (expense 50 + 200 = 250),
+        // second is the worker side (income 300 + 200 = 500).
+        LambdaUpdateWrapper<WalletAccount> userUpdate = captor.getAllValues().get(0);
+        LambdaUpdateWrapper<WalletAccount> workerUpdate = captor.getAllValues().get(1);
+        assertThat(String.valueOf(userUpdate.getSqlSet())).contains("total_expense");
+        assertThat(String.valueOf(workerUpdate.getSqlSet())).contains("total_income");
+        assertThat(boundValues(userUpdate)).contains(new BigDecimal("250.00"));
+        assertThat(boundValues(workerUpdate)).contains(new BigDecimal("500.00"));
+    }
+
+    /** All literal values bound into a wrapper, in declaration order. */
+    private java.util.List<BigDecimal> boundValues(
+            com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<WalletAccount> wrapper) {
+        java.util.List<BigDecimal> values = new java.util.ArrayList<>();
+        for (Object v : wrapper.getParamNameValuePairs().values()) {
+            if (v instanceof BigDecimal bd) {
+                values.add(bd);
+            }
+        }
+        return values;
+    }
+
+    /** A brand new account starts with zeroed cumulative columns so reads never see null. */
+    @Test
+    void newAccountInitialisesCumulativeColumns() {
+        when(accountMapper.selectOne(any())).thenReturn(null);
+        when(accountMapper.insert(any(WalletAccount.class))).thenReturn(1);
+
+        WalletAccount created = service.getAccount(USER_ID);
+
+        assertThat(created.getWithdrawing()).isEqualByComparingTo("0.00");
+        assertThat(created.getTotalIncome()).isEqualByComparingTo("0.00");
+        assertThat(created.getTotalRecharge()).isEqualByComparingTo("0.00");
+        assertThat(created.getTotalExpense()).isEqualByComparingTo("0.00");
+    }
+
+    /** Null cumulative values on legacy rows are treated as zero, not NPE. */
+    @Test
+    void settleToleratesNullTotalsOnLegacyRows() {
+        when(transactionMapper.selectCount(any())).thenReturn(0L);
+        when(accountMapper.selectOne(any())).thenAnswer(inv -> {
+            WalletAccount u = account(USER_ID, "500.00", "200.00", 0);
+            u.setTotalExpense(null);
+            return u;
+        }).thenAnswer(inv -> {
+            WalletAccount w = account(WORKER_ID, "100.00", "0.00", 0);
+            w.setTotalIncome(null);
+            return w;
+        });
+        when(accountMapper.update(any(), any())).thenReturn(1);
+
+        service.settle(ORDER_NO, USER_ID, WORKER_ID, new BigDecimal("200.00"));
+
+        verify(accountMapper, times(2)).update(isNull(), any());
     }
 }

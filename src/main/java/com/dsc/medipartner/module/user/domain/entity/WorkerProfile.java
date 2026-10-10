@@ -30,6 +30,8 @@ public class WorkerProfile extends BaseEntity {
 
     /** 常驻城市（V10） */
     private String city;
+    /** 常驻城市国标 6 位码（V14，H-12：筛选与就近排序口径） */
+    private String cityCode;
     /** 可接单服务类型码值，逗号分隔（V10） */
     private String serviceTypes;
     /** 个人简介（V10） */

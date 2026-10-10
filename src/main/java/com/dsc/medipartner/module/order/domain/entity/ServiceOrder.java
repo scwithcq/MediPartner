@@ -30,11 +30,23 @@ public class ServiceOrder extends BaseEntity {
     private BigDecimal serviceHours;
     private String symptomDesc;
     private String city;
+    /** 就医城市国标 6 位码（V14，H-12：计价与运力匹配口径；city 仅作展示） */
+    private String cityCode;
     /** 联系电话（V13，不传则用账号绑定手机号） */
     private String contactPhone;
     private String hospitalPref;
     /** 下单补充说明（V13，契约 §5.2 remark） */
     private String remark;
+    /** 取消原因（V14，状态 60/70 时有值） */
+    private String cancelReason;
+    /** 虚拟号（V14，由 orderNo 哈希稳定生成，阶段 4 启用） */
+    private String virtualPhone;
+    /** 累计已退款金额（V14，仲裁/人工退款） */
+    private BigDecimal refundedAmount;
+    /** 异常类型（V14，§7.15） */
+    private String abnormalType;
+    /** 异常说明（V14，§7.15） */
+    private String abnormalRemark;
     private LocalDateTime serviceTime;
     private Integer version;
     private LocalDateTime acceptedAt;

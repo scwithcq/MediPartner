@@ -162,6 +162,8 @@ public class WalletServiceImpl implements WalletService {
                     .eq(WalletAccount::getVersion, user.getVersion())
                     .set(WalletAccount::getFrozen, user.getFrozen().subtract(amount))
                     .set(WalletAccount::getBalance, user.getBalance().subtract(amount))
+                    // V14 H-13：累计支出只增不减（§3.6）
+                    .set(WalletAccount::getTotalExpense, nz(user.getTotalExpense()).add(amount))
                     .set(WalletAccount::getVersion, user.getVersion() + 1));
             if (userUpdated == 1) {
                 record(userId, orderNo, orderNo, TxnTypeEnum.PAY, amount,
@@ -181,6 +183,8 @@ public class WalletServiceImpl implements WalletService {
                     .eq(WalletAccount::getUserId, workerId)
                     .eq(WalletAccount::getVersion, worker.getVersion())
                     .set(WalletAccount::getBalance, worker.getBalance().add(amount))
+                    // V14 H-13：累计收入只增不减（§3.6、§7.17）
+                    .set(WalletAccount::getTotalIncome, nz(worker.getTotalIncome()).add(amount))
                     .set(WalletAccount::getVersion, worker.getVersion() + 1));
             if (workerUpdated == 1) {
                 record(workerId, orderNo, orderNo, TxnTypeEnum.INCOME, amount,
@@ -219,6 +223,11 @@ public class WalletServiceImpl implements WalletService {
         }
     }
 
+    /** 累计列容错取值：历史数据可能为 null，按 0 处理 */
+    private BigDecimal nz(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
     private WalletAccount getOrCreate(Long userId) {
         WalletAccount account = accountMapper.selectOne(new LambdaQueryWrapper<WalletAccount>()
                 .eq(WalletAccount::getUserId, userId));
@@ -229,6 +238,11 @@ public class WalletServiceImpl implements WalletService {
         created.setUserId(userId);
         created.setBalance(BigDecimal.ZERO);
         created.setFrozen(BigDecimal.ZERO);
+        // V14 累计列：DB 有默认值，但实体显式赋值避免回读前为 null
+        created.setWithdrawing(BigDecimal.ZERO);
+        created.setTotalIncome(BigDecimal.ZERO);
+        created.setTotalRecharge(BigDecimal.ZERO);
+        created.setTotalExpense(BigDecimal.ZERO);
         created.setVersion(0);
         try {
             accountMapper.insert(created);

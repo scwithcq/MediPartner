@@ -16,6 +16,7 @@ import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.order.service.VirtualPhoneService;
 import com.dsc.medipartner.module.review.service.ReviewService;
+import com.dsc.medipartner.module.ticket.service.AppealService;
 import com.dsc.medipartner.module.user.service.CreditService;
 import com.dsc.medipartner.module.user.service.UserService;
 import com.dsc.medipartner.module.user.service.WorkerService;
@@ -67,7 +68,8 @@ class OrderPagingTest {
                 new ActionResolver(),
                 new OrderAssembler(),
                 new VirtualPhoneService(),
-                mock(OrderStatusLogService.class));
+                mock(OrderStatusLogService.class),
+                mock(AppealService.class));
 
         if (hall) {
             service.pageHall(query);

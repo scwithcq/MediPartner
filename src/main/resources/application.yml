@@ -39,6 +39,15 @@ medi:
   file:
     # 本地 OSS 存储根目录（阶段 8 换 MinIO/OSS 时仅改实现）
     base-dir: ${MEDI_FILE_BASE_DIR:./data/files}
+  wallet:
+    # 阶段 4 提现限额（§7.18）：低于下限或超上限返回 4003
+    min-withdraw: 10
+    max-withdraw: 5000
+    # 阶段 4 充值限额（§3.8）：越界返回 4006
+    min-recharge: 0.01
+    max-recharge: 10000
+    # 充值支付超时（分钟），超时由定时任务置 EXPIRED（阶段 5）
+    recharge-expire-minutes: 15
   mq:
     # async=进程内 @Async（默认，无需 RabbitMQ）；rabbit=真实消息队列（docker compose up -d rabbitmq 后切换）
     type: ${MEDI_MQ_TYPE:async}

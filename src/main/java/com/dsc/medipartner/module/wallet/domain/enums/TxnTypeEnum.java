@@ -25,7 +25,9 @@ public enum TxnTypeEnum {
     PAY("支付", Direction.OUT),
     INCOME("收入", Direction.IN),
     REFUND("退款", Direction.IN),
-    RECHARGE("充值", Direction.IN);
+    RECHARGE("充值", Direction.IN),
+    /** 提现（阶段 4 / H-14 补齐）：申请时即扣减 balance，出账方向 */
+    WITHDRAW("提现", Direction.OUT);
 
     /** 中文名（§3.7 typeName） */
     private final String typeName;

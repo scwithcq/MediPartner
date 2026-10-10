@@ -15,6 +15,7 @@ import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.MarkAbnormalRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.PriceResult;
 import com.dsc.medipartner.module.order.domain.dto.StartServiceRequest;
@@ -37,6 +38,7 @@ import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.order.service.VirtualPhoneService;
 import com.dsc.medipartner.module.review.service.ReviewService;
+import com.dsc.medipartner.module.ticket.service.AppealService;
 import com.dsc.medipartner.module.user.domain.entity.SysUser;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
 import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
@@ -84,6 +86,7 @@ public class OrderServiceImpl implements OrderService {
     private final OrderAssembler orderAssembler;
     private final VirtualPhoneService virtualPhoneService;
     private final OrderStatusLogService statusLogService;
+    private final AppealService appealService;
 
     /** 服务时间需晚于当前时间 30 分钟（契约 §5.2） */
     private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
@@ -114,7 +117,7 @@ public class OrderServiceImpl implements OrderService {
                             PriceService priceService, UserService userService,
                             @Lazy ReviewService reviewService, ActionResolver actionResolver,
                             OrderAssembler orderAssembler, VirtualPhoneService virtualPhoneService,
-                            OrderStatusLogService statusLogService) {
+                            OrderStatusLogService statusLogService, @Lazy AppealService appealService) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
@@ -130,6 +133,7 @@ public class OrderServiceImpl implements OrderService {
         this.orderAssembler = orderAssembler;
         this.virtualPhoneService = virtualPhoneService;
         this.statusLogService = statusLogService;
+        this.appealService = appealService;
     }
 
     @Override
@@ -469,6 +473,45 @@ public class OrderServiceImpl implements OrderService {
     public long countHall() {
         return orderMapper.selectCount(new LambdaQueryWrapper<ServiceOrder>()
                 .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode()));
+    }
+
+    // ---------------- §7.15 标记订单异常 ----------------
+
+    @Override
+    @Transactional
+    public void markAbnormal(Long workerId, String orderNo, MarkAbnormalRequest request) {
+        ServiceOrder order = requireOrder(orderNo);
+        if (!workerId.equals(order.getWorkerId())) {
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        stateMachineService.transition(OrderState.of(order.getOrderStatus()), OrderEvent.MARK_ABNORMAL);
+
+        String abnormalType = request.getAbnormalType().trim().toUpperCase(Locale.ROOT);
+        int updated = orderMapper.update(null, new LambdaUpdateWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getId, order.getId())
+                .eq(ServiceOrder::getOrderStatus, OrderState.IN_SERVICE.getCode())
+                .eq(ServiceOrder::getVersion, order.getVersion())
+                .set(ServiceOrder::getOrderStatus, OrderState.ABNORMAL.getCode())
+                .set(ServiceOrder::getAbnormalType, abnormalType)
+                .set(ServiceOrder::getAbnormalRemark, request.getReason().trim())
+                .set(ServiceOrder::getVersion, order.getVersion() + 1));
+        if (updated != 1) {
+            throw new BizException(ErrorCode.ORDER_STATE_ILLEGAL);
+        }
+
+        // ⚠ 资金保持冻结不动：既不 settle 也不 unfreeze。
+        // 异常单只能由管理端 §9.16 取消 / §9.17 退款收尾，双方都没有自助出口（D9 刻意设计）。
+        statusLogService.record(orderNo, OrderState.IN_SERVICE.getCode(),
+                OrderState.ABNORMAL.getCode(), OrderEvent.MARK_ABNORMAL.name(),
+                OrderStatusLogServiceImpl.OPERATOR_WORKER, workerId,
+                abnormalType + "：" + request.getReason().trim());
+
+        // 自动建仲裁工单进管理端队列（§7.15）；失败不影响主流程，异常单本身已是可检索状态
+        try {
+            appealService.createForAbnormal(orderNo, workerId, request.getReason());
+        } catch (Exception e) {
+            log.warn("[order] 异常单自动建申诉工单失败 orderNo={}: {}", orderNo, e.getMessage());
+        }
     }
 
     /** 陪诊师资料（跨模块只调 Service，见手册 §3.2 铁律）；workerId 为空时返回 null */

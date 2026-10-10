@@ -11,10 +11,12 @@ import com.dsc.medipartner.module.order.domain.enums.ServiceType;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.user.domain.dto.UpdateWorkerProfileRequest;
+import com.dsc.medipartner.module.user.domain.dto.WorkerApplyRequest;
 import com.dsc.medipartner.module.user.domain.entity.SysUser;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
 import com.dsc.medipartner.module.user.domain.enums.AuditStatusEnum;
 import com.dsc.medipartner.module.user.domain.enums.CreditLevel;
+import com.dsc.medipartner.module.user.domain.vo.WorkerApplyStatusVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
 import com.dsc.medipartner.module.user.mapper.WorkerProfileMapper;
@@ -34,7 +36,9 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -72,6 +76,119 @@ public class WorkerServiceImpl implements WorkerService {
     public WorkerProfile getByUserId(Long userId) {
         return workerProfileMapper.selectOne(new LambdaQueryWrapper<WorkerProfile>()
                 .eq(WorkerProfile::getUserId, userId));
+    }
+
+    // ---------------- §3.4 / §3.5 入驻申请 ----------------
+
+    /**
+     * §3.4 入驻申请。
+     *
+     * <p>状态机（契约备注 2）：无记录 → 建 PENDING；PENDING 重复提交 → 5002；
+     * PASS → 1003（已通过不再受理）；REJECT → 允许重新提交，覆盖原记录并重置 PENDING。
+     */
+    @Override
+    @Transactional
+    public Map<String, Object> apply(Long userId, WorkerApplyRequest request) {
+        SysUser user = userService.getById(userId);
+        // 手机号唯一性：该手机号已被其他账号占用则 2002（契约 §3.4 错误码）
+        String phone = request.getPhone().trim();
+        if (StringUtils.hasText(phone) && findByPhone(phone, userId)) {
+            throw new BizException(ErrorCode.PHONE_ALREADY_BOUND);
+        }
+
+        List<String> serviceTypes = new ArrayList<>(request.getServiceTypes());
+        for (String raw : serviceTypes) {
+            String code = raw == null ? "" : raw.trim();
+            if (!ServiceType.isValid(code)) {
+                throw new BizException(ErrorCode.PARAM_ERROR, "不支持的服务类型：" + raw);
+            }
+        }
+
+        WorkerProfile existing = getByUserId(userId);
+        if (existing != null) {
+            String status = existing.getAuditStatus();
+            if (AuditStatusEnum.PASS.name().equals(status)) {
+                throw new BizException(ErrorCode.FORBIDDEN, "已完成入驻，无需重复申请");
+            }
+            if (AuditStatusEnum.PENDING.name().equals(status)) {
+                throw new BizException(ErrorCode.APPEAL_DUPLICATE, "已有待审核申请，请勿重复提交");
+            }
+        }
+
+        WorkerProfile profile = existing == null ? new WorkerProfile() : existing;
+        profile.setUserId(userId);
+        profile.setRealName(request.getRealName().trim());
+        profile.setIdCardNo(request.getIdCardNo().trim());
+        profile.setHealthCertUrl(request.getHealthCertUrl().trim());
+        profile.setCity(request.getCity().trim());
+        profile.setServiceTypes(joinServiceTypes(serviceTypes));
+        profile.setIntro(trimToNull(request.getIntro()));
+        // 重新提交：重置为 PENDING 并清掉上次的审核结论，避免"驳回原因"残留
+        profile.setAuditStatus(AuditStatusEnum.PENDING.name());
+        profile.setAuditRemark(null);
+        profile.setAuditBy(null);
+        profile.setAuditTime(null);
+        if (profile.getCreditScore() == null) {
+            // 信用分仅在审核通过时正式生效（§9.10 初始化 100），此处先落初值避免列 NOT NULL 冲突
+            profile.setCreditScore(DEFAULT_CREDIT);
+        }
+
+        if (existing == null) {
+            workerProfileMapper.insert(profile);
+        } else {
+            workerProfileMapper.updateById(profile);
+        }
+        // 联系手机号同步到 sys_user（未绑定过时补上），便于后续派单联系
+        if (StringUtils.hasText(phone) && !StringUtils.hasText(user.getPhone())) {
+            userService.bindPhoneIfAbsent(userId, phone);
+        }
+
+        log.info("[worker] 入驻申请已提交 userId={} applyId={} city={} serviceTypes={}",
+                userId, profile.getId(), profile.getCity(), profile.getServiceTypes());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("applyId", String.valueOf(profile.getId()));
+        result.put("auditStatus", AuditStatusEnum.PENDING.name());
+        return result;
+    }
+
+    @Override
+    public WorkerApplyStatusVO getApplyStatus(Long userId) {
+        WorkerProfile profile = getByUserId(userId);
+        // 从未申请过：返回 null，由 Controller 转成空对象 {}（契约 §3.5）
+        if (profile == null) {
+            return null;
+        }
+        WorkerApplyStatusVO vo = new WorkerApplyStatusVO();
+        vo.setApplyId(profile.getId());
+        vo.setAuditStatus(profile.getAuditStatus());
+        vo.setAuditRemark(profile.getAuditRemark());
+        vo.setAuditTime(profile.getAuditTime());
+        // 信用分只在通过后有意义；未通过时不下发（前端据 auditStatus 决定是否展示）
+        if (AuditStatusEnum.PASS.name().equals(profile.getAuditStatus())) {
+            vo.setCreditScore(profile.getCreditScore());
+        }
+        vo.setSubmittedAt(profile.getCreatedAt());
+        return vo;
+    }
+
+    /** 手机号是否已被「其它」账号绑定（排除自己，避免重复提交时误判） */
+    private boolean findByPhone(String phone, Long selfUserId) {
+        List<SysUser> users = userService.listByPhones(java.util.List.of(phone));
+        for (SysUser user : users) {
+            if (!selfUserId.equals(user.getId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 去空白后为空则返回 null，避免落库空串 */
+    private String trimToNull(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        String trimmed = text.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     @Override

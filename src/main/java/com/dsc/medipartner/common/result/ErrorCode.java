@@ -15,6 +15,7 @@ public enum ErrorCode {
     REPEAT_REQUEST(1005, "请求过于频繁，请稍后再试"),
     FEATURE_NOT_AVAILABLE(1006, "该功能尚未开放，敬请期待"),
     USER_NOT_FOUND(2001, "用户不存在"),
+    PHONE_ALREADY_BOUND(2002, "该手机号已被其他账号绑定"),
     WORKER_AUDIT_NOT_PASS(2003, "入驻审核未通过，暂不可接单"),
 
     ORDER_NOT_FOUND(3001, "订单不存在"),
@@ -29,10 +30,14 @@ public enum ErrorCode {
 
     WALLET_BALANCE_NOT_ENOUGH(4001, "账户余额不足"),
     WALLET_TXN_DUPLICATE(4002, "幂等键重复"),
+    WITHDRAW_AMOUNT_ILLEGAL(4003, "提现金额不合法"),
     WALLET_ACCOUNT_NOT_FOUND(4004, "钱包账户不存在"),
     WALLET_UPDATE_CONFLICT(4005, "钱包更新冲突，请重试"),
+    RECHARGE_AMOUNT_ILLEGAL(4006, "充值金额不合法"),
+    WITHDRAW_IN_PROGRESS(4007, "已有提现申请处理中，请勿重复提交"),
 
     TICKET_NOT_FOUND(5001, "工单不存在"),
+    APPEAL_DUPLICATE(5002, "该订单已申诉过，不可重复提交"),
     REVIEW_NOT_ALLOWED(5003, "当前状态不可评价"),
     REVIEW_ALREADY_REPLIED(5004, "该评价已回复，不可重复回复"),
     REVIEW_APPEND_USED(5005, "追评机会已使用"),

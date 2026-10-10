@@ -20,6 +20,12 @@ public interface UserService {
     /** 批量查用户（评价列表回填昵称头像用）；入参为空返回空列表，查不到的 ID 直接缺席 */
     List<SysUser> listByIds(Collection<Long> userIds);
 
+    /** 按手机号批量查（入驻申请做手机号唯一性校验用）；入参为空返回空列表 */
+    List<SysUser> listByPhones(Collection<String> phones);
+
+    /** 用户当前未绑定手机号时补绑（入驻申请把联系手机号同步到账号）；已有手机号则不动 */
+    void bindPhoneIfAbsent(Long userId, String phone);
+
     /**
      * 我的资料（契约 §3.1、附录 H-5）：返回 {@link UserVO} 而非裸实体，
      * {@code phone} 走 {@code DesensitizeUtil} 脱敏；用户不存在抛 2001。

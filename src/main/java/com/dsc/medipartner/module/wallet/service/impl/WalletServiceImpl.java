@@ -70,6 +70,7 @@ public class WalletServiceImpl implements WalletService {
         vo.setAvailableBalance(balance.subtract(frozen));
         vo.setTotalIncome(nz(account.getTotalIncome()));
         vo.setTotalExpense(nz(account.getTotalExpense()));
+        vo.setTotalRecharge(nz(account.getTotalRecharge()));
         vo.setWithdrawing(nz(account.getWithdrawing()));
         vo.setUpdatedAt(account.getUpdatedAt());
         return vo;
@@ -276,6 +277,93 @@ public class WalletServiceImpl implements WalletService {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BizException(ErrorCode.PARAM_ERROR, "金额必须大于0");
         }
+    }
+
+    // ---------------- 阶段 4：充值入账 / 提现出账与回退 ----------------
+
+    /**
+     * §3.9 充值入账。幂等由 {@code biz_no = rechargeNo} + type=RECHARGE 的唯一键兜底：
+     * 重复回调会命中 4002，调用方（RechargeService）据状态机先行拦截。
+     */
+    @Override
+    @Transactional
+    public String recharge(Long userId, String rechargeNo, BigDecimal amount) {
+        checkAmount(amount);
+        for (int i = 0; i < MAX_RETRY; i++) {
+            WalletAccount account = getOrCreate(userId);
+            int updated = accountMapper.update(null, new LambdaUpdateWrapper<WalletAccount>()
+                    .eq(WalletAccount::getUserId, userId)
+                    .eq(WalletAccount::getVersion, account.getVersion())
+                    .set(WalletAccount::getBalance, account.getBalance().add(amount))
+                    // 累计充值只增不减
+                    .set(WalletAccount::getTotalRecharge, nz(account.getTotalRecharge()).add(amount))
+                    .set(WalletAccount::getVersion, account.getVersion() + 1));
+            if (updated == 1) {
+                return record(userId, null, rechargeNo, TxnTypeEnum.RECHARGE, amount,
+                        account.getBalance(), account.getBalance().add(amount),
+                        account.getFrozen(), account.getFrozen(), "充值");
+            }
+        }
+        throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT);
+    }
+
+    /**
+     * §7.18 提现出账（申请时调用）。
+     * 语义：{@code balance -= amount} 且 {@code withdrawing += amount}——
+     * 钱离开可用余额但仍属于用户（处理中），驳回时原路退回。
+     */
+    @Override
+    @Transactional
+    public void withdrawApply(Long userId, String withdrawNo, BigDecimal amount) {
+        checkAmount(amount);
+        for (int i = 0; i < MAX_RETRY; i++) {
+            WalletAccount account = getOrCreate(userId);
+            // 提现只能用「可用余额」= balance - frozen，不能用被订单冻结的钱
+            if (account.getBalance().subtract(account.getFrozen()).compareTo(amount) < 0) {
+                throw new BizException(ErrorCode.WALLET_BALANCE_NOT_ENOUGH);
+            }
+            int updated = accountMapper.update(null, new LambdaUpdateWrapper<WalletAccount>()
+                    .eq(WalletAccount::getUserId, userId)
+                    .eq(WalletAccount::getVersion, account.getVersion())
+                    .set(WalletAccount::getBalance, account.getBalance().subtract(amount))
+                    .set(WalletAccount::getWithdrawing, nz(account.getWithdrawing()).add(amount))
+                    .set(WalletAccount::getVersion, account.getVersion() + 1));
+            if (updated == 1) {
+                record(userId, null, withdrawNo, TxnTypeEnum.WITHDRAW, amount,
+                        account.getBalance(), account.getBalance().subtract(amount),
+                        account.getFrozen(), account.getFrozen(), "提现申请");
+                return;
+            }
+        }
+        throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT);
+    }
+
+    /**
+     * §9.21 提现驳回回退：余额加回、处理中金额减掉，写 REFUND 流水。
+     * 与 {@link #withdrawApply} 的 WITHDRAW 流水共享 {@code biz_no = withdrawNo}，靠 type 区分。
+     */
+    @Override
+    @Transactional
+    public void withdrawReject(Long userId, String withdrawNo, BigDecimal amount) {
+        checkAmount(amount);
+        for (int i = 0; i < MAX_RETRY; i++) {
+            WalletAccount account = getOrCreate(userId);
+            int updated = accountMapper.update(null, new LambdaUpdateWrapper<WalletAccount>()
+                    .eq(WalletAccount::getUserId, userId)
+                    .eq(WalletAccount::getVersion, account.getVersion())
+                    .set(WalletAccount::getBalance, account.getBalance().add(amount))
+                    // 处理中金额可能因历史数据为负，取下界 0 避免出现负值
+                    .set(WalletAccount::getWithdrawing,
+                            nz(account.getWithdrawing()).subtract(amount).max(BigDecimal.ZERO))
+                    .set(WalletAccount::getVersion, account.getVersion() + 1));
+            if (updated == 1) {
+                record(userId, null, withdrawNo, TxnTypeEnum.REFUND, amount,
+                        account.getBalance(), account.getBalance().add(amount),
+                        account.getFrozen(), account.getFrozen(), "提现驳回退回");
+                return;
+            }
+        }
+        throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT);
     }
 
     /** 累计列容错取值：历史数据可能为 null，按 0 处理 */

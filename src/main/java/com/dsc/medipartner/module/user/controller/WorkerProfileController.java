@@ -8,11 +8,14 @@ import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
 import com.dsc.medipartner.module.user.service.CreditService;
 import com.dsc.medipartner.module.user.service.WorkerService;
+import com.dsc.medipartner.module.wallet.domain.vo.EarningVO;
+import com.dsc.medipartner.module.wallet.service.EarningService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -25,10 +28,13 @@ public class WorkerProfileController {
 
     private final WorkerService workerService;
     private final CreditService creditService;
+    private final EarningService earningService;
 
-    public WorkerProfileController(WorkerService workerService, CreditService creditService) {
+    public WorkerProfileController(WorkerService workerService, CreditService creditService,
+                                   EarningService earningService) {
         this.workerService = workerService;
         this.creditService = creditService;
+        this.earningService = earningService;
     }
 
     /** §7.1 工作台首页聚合：一次请求返回首页全部数据，避免弱网下首屏发四五个请求 */
@@ -47,6 +53,14 @@ public class WorkerProfileController {
     @PutMapping("/profile")
     public R<WorkerProfileVO> updateProfile(@Valid @RequestBody UpdateWorkerProfileRequest request) {
         return R.ok(workerService.updateProfile(UserContext.userId(), request));
+    }
+
+    /** §7.17 收益概览：period 取 WEEK(默认)/MONTH/YEAR/ALL */
+    @GetMapping("/earning")
+    public R<EarningVO> earning(@RequestParam(required = false) String period,
+                                @RequestParam(defaultValue = "1") long pageNum,
+                                @RequestParam(defaultValue = "10") long pageSize) {
+        return R.ok(earningService.getEarning(UserContext.userId(), period, pageNum, pageSize));
     }
 
     /** §7.16 信用中心：等级 / 上限 / 30 天曲线 / 最近流水 / 规则 */

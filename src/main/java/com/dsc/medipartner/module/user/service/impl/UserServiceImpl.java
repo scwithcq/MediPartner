@@ -88,6 +88,26 @@ public class UserServiceImpl implements UserService {
         return userMapper.selectBatchIds(userIds);
     }
 
+    @Override
+    public List<SysUser> listByPhones(Collection<String> phones) {
+        if (phones == null || phones.isEmpty()) {
+            return List.of();
+        }
+        return userMapper.selectList(new LambdaQueryWrapper<SysUser>().in(SysUser::getPhone, phones));
+    }
+
+    @Override
+    public void bindPhoneIfAbsent(Long userId, String phone) {
+        if (!StringUtils.hasText(phone)) {
+            return;
+        }
+        // 条件更新：仅当当前 phone 为空时写入，避免覆盖用户已绑定的号码
+        userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, userId)
+                .and(w -> w.isNull(SysUser::getPhone).or().eq(SysUser::getPhone, ""))
+                .set(SysUser::getPhone, phone.trim()));
+    }
+
     /**
      * 我的资料（契约 §3.1、附录 H-5）：脱敏手机号、补 roles，并带上陪诊师审核状态。
      * 跨模块取陪诊师档案走 {@code WorkerService} 接口，不注入其 Mapper（手册 §3.2 铁律）。

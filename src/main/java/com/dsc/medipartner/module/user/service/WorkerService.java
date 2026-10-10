@@ -1,7 +1,9 @@
 package com.dsc.medipartner.module.user.service;
 
 import com.dsc.medipartner.module.user.domain.dto.UpdateWorkerProfileRequest;
+import com.dsc.medipartner.module.user.domain.dto.WorkerApplyRequest;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
+import com.dsc.medipartner.module.user.domain.vo.WorkerApplyStatusVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
 
@@ -25,4 +27,15 @@ public interface WorkerService {
 
     /** §7.1 工作台首页聚合：昵称、信用、接单能力、各类计数与本月收益 */
     WorkerOverviewVO getOverview(Long workerUserId);
+
+    /**
+     * §3.4 入驻申请。
+     * 已有 PASS 记录返回 1003；PENDING 期间重复提交返回 5002；REJECT 允许重新提交（覆盖并重置 PENDING）。
+     *
+     * @return {@code {applyId, auditStatus=PENDING}}
+     */
+    java.util.Map<String, Object> apply(Long userId, WorkerApplyRequest request);
+
+    /** §3.5 查询入驻申请状态；从未申请过返回 null（Controller 转成空对象 {}） */
+    WorkerApplyStatusVO getApplyStatus(Long userId);
 }

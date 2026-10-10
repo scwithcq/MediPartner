@@ -22,6 +22,7 @@ import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.order.service.VirtualPhoneService;
 import com.dsc.medipartner.module.review.service.ReviewService;
+import com.dsc.medipartner.module.ticket.service.AppealService;
 import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
 import com.dsc.medipartner.module.user.service.CreditService;
 import com.dsc.medipartner.module.user.service.UserService;
@@ -102,7 +103,7 @@ class OrderServiceImplTest {
         service = new OrderServiceImpl(orderMapper, walletService, workerService, stateMachineService,
                 traceService, reportTaskPublisher, demandService, creditService, priceService,
                 userService, reviewService, actionResolver, orderAssembler, new VirtualPhoneService(),
-                statusLogService);
+                statusLogService, mock(AppealService.class));
     }
 
     @AfterEach

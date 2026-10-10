@@ -6,10 +6,12 @@ import com.dsc.medipartner.common.result.PageResult;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.MarkAbnormalRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.StartServiceRequest;
 import com.dsc.medipartner.module.order.domain.dto.UploadTraceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
+import com.dsc.medipartner.module.order.domain.enums.OrderState;
 import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
@@ -26,6 +28,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/worker/order")
@@ -92,6 +98,19 @@ public class WorkerOrderController {
     @GetMapping("/{orderNo}/traces")
     public R<PageResult<TraceVO>> traces(@PathVariable String orderNo, PageQuery query) {
         return R.ok(PageResult.of(traceService.pageTraces(orderNo, query.getPageNum(), query.getPageSize())));
+    }
+
+    /** §7.15 标记订单异常：30 -> 70，资金保持冻结，自动建仲裁工单 */
+    @PostMapping("/{orderNo}/abnormal")
+    public R<Map<String, Object>> markAbnormal(@PathVariable String orderNo,
+                                               @Valid @RequestBody MarkAbnormalRequest request) {
+        orderService.markAbnormal(UserContext.userId(), orderNo, request);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("orderNo", orderNo);
+        result.put("orderStatus", OrderState.ABNORMAL.getCode());
+        result.put("markedAt", LocalDateTime.now());
+        result.put("tip", "已转平台处理，预计 24 小时内给出结论");
+        return R.ok(result);
     }
 
     /** §7.14 结束服务：落 1~3 张凭证 + 服务小结，状态 30->40，提交后异步触发 AI 报告 */

@@ -28,6 +28,8 @@ public class WalletVO {
     private BigDecimal totalIncome;
     /** 累计支出（V14） */
     private BigDecimal totalExpense;
+    /** 累计充值（V14） */
+    private BigDecimal totalRecharge;
     /** 提现处理中金额（阶段 4 启用，V14 列已就位） */
     private BigDecimal withdrawing;
     /** 最近变动时间 */

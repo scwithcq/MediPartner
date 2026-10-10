@@ -20,6 +20,8 @@ class TxnTypeEnumTest {
         assertThat(TxnTypeEnum.nameOf("INCOME")).isEqualTo("收入");
         assertThat(TxnTypeEnum.nameOf("REFUND")).isEqualTo("退款");
         assertThat(TxnTypeEnum.nameOf("RECHARGE")).isEqualTo("充值");
+        // H-14：提现枚举于阶段 4 补齐
+        assertThat(TxnTypeEnum.nameOf("WITHDRAW")).isEqualTo("提现");
     }
 
     /** Directions drive the +/- sign and colour in the client. */
@@ -29,6 +31,8 @@ class TxnTypeEnumTest {
         assertThat(TxnTypeEnum.directionOf("REFUND")).isEqualTo("IN");
         assertThat(TxnTypeEnum.directionOf("RECHARGE")).isEqualTo("IN");
         assertThat(TxnTypeEnum.directionOf("PAY")).isEqualTo("OUT");
+        // 提现是资金出口，出账方向
+        assertThat(TxnTypeEnum.directionOf("WITHDRAW")).isEqualTo("OUT");
         // freeze/unfreeze only move the frozen bucket, balance is unchanged
         assertThat(TxnTypeEnum.directionOf("FREEZE")).isEqualTo("LOCK");
         assertThat(TxnTypeEnum.directionOf("UNFREEZE")).isEqualTo("LOCK");
@@ -43,8 +47,9 @@ class TxnTypeEnumTest {
     /** Unknown or missing types fall back gracefully instead of throwing on a read path. */
     @Test
     void unknownTypeDegradesGracefully() {
-        assertThat(TxnTypeEnum.nameOf("WITHDRAW")).isEqualTo("WITHDRAW");
-        assertThat(TxnTypeEnum.directionOf("WITHDRAW")).isNull();
+        // 用一个确实不存在的类型验证容错（WITHDRAW 已在阶段 4 补齐，不能再当未知值用）
+        assertThat(TxnTypeEnum.nameOf("NOT_A_TXN_TYPE")).isEqualTo("NOT_A_TXN_TYPE");
+        assertThat(TxnTypeEnum.directionOf("NOT_A_TXN_TYPE")).isNull();
         assertThat(TxnTypeEnum.nameOf(null)).isNull();
         assertThat(TxnTypeEnum.directionOf(null)).isNull();
     }

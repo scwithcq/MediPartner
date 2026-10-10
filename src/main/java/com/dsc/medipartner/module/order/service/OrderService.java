@@ -3,6 +3,7 @@ package com.dsc.medipartner.module.order.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.MarkAbnormalRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.StartServiceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
@@ -83,6 +84,9 @@ public interface OrderService {
 
     /** §5.7 取消订单（带取消原因，阶段 1.5 新增入参） */
     void cancel(Long userId, String orderNo, String reason);
+
+    /** §7.15 标记订单异常：30 -> 70，资金保持冻结，自动建 WORKER_MARK 申诉工单 */
+    void markAbnormal(Long workerId, String orderNo, MarkAbnormalRequest request);
 
     long countActive(Long workerId);
 }

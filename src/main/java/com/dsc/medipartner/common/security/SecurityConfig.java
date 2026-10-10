@@ -52,12 +52,16 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error").permitAll()
                         .requestMatchers("/files/**").permitAll()
+                        // §8.3 客户端配置 / §8.4 版本检查：小程序登录页也要读，故匿名（附录 G.2）
+                        .requestMatchers("/api/common/config", "/api/common/version").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/worker/**").hasRole("WORKER")
                         .requestMatchers("/api/user/**").hasRole("USER")
                         .requestMatchers("/api/order/**").hasRole("USER")
                         .requestMatchers("/api/ai/**").hasRole("USER")
                         .requestMatchers("/api/demand/**").hasRole("USER")
+                        // §8.1 上传 / §8.2 字典：需登录但任意角色可用
+                        .requestMatchers("/api/common/**").authenticated()
                         .requestMatchers("/api/wallet/**").authenticated()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);

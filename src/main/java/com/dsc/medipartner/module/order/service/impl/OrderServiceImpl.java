@@ -17,6 +17,7 @@ import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.PriceResult;
+import com.dsc.medipartner.module.order.domain.dto.StartServiceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderEvent;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
@@ -24,12 +25,14 @@ import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderTimelineVO;
 import com.dsc.medipartner.module.order.domain.vo.PricePreviewVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.ActionResolver;
 import com.dsc.medipartner.module.order.service.OrderAssembler;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
+import com.dsc.medipartner.module.order.service.OrderStatusLogService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.order.service.VirtualPhoneService;
@@ -79,6 +82,7 @@ public class OrderServiceImpl implements OrderService {
     private final ActionResolver actionResolver;
     private final OrderAssembler orderAssembler;
     private final VirtualPhoneService virtualPhoneService;
+    private final OrderStatusLogService statusLogService;
 
     /** 服务时间需晚于当前时间 30 分钟（契约 §5.2） */
     private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
@@ -103,7 +107,8 @@ public class OrderServiceImpl implements OrderService {
                             DemandService demandService, CreditService creditService,
                             PriceService priceService, UserService userService,
                             ReviewService reviewService, ActionResolver actionResolver,
-                            OrderAssembler orderAssembler, VirtualPhoneService virtualPhoneService) {
+                            OrderAssembler orderAssembler, VirtualPhoneService virtualPhoneService,
+                            OrderStatusLogService statusLogService) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
@@ -118,6 +123,7 @@ public class OrderServiceImpl implements OrderService {
         this.actionResolver = actionResolver;
         this.orderAssembler = orderAssembler;
         this.virtualPhoneService = virtualPhoneService;
+        this.statusLogService = statusLogService;
     }
 
     @Override
@@ -154,6 +160,10 @@ public class OrderServiceImpl implements OrderService {
         order.setDemandId(request.getDemandId());
         order.setVersion(0);
         orderMapper.insert(order);
+        // §5.5：下单首条流转日志（CREATE，无前状态）
+        statusLogService.record(orderNo, null, OrderState.WAITING_ACCEPT.getCode(),
+                OrderEvent.CREATE.name(),
+                OrderStatusLogServiceImpl.OPERATOR_USER, userId, null);
         if (request.getDemandId() != null) {
             demandService.markOrdered(request.getDemandId(), orderNo);
         }
@@ -236,9 +246,12 @@ public class OrderServiceImpl implements OrderService {
         if (!userId.equals(order.getUserId())) {
             throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
         }
-        return orderAssembler.toDetail(order,
+        OrderDetailVO vo = orderAssembler.toDetail(order,
                 loadWorkerProfile(order.getWorkerId()), loadUser(order.getWorkerId()),
                 actionResolver.resolveForUser(order.getOrderStatus(), hasReview(orderNo, "USER")));
+        // §5.4：详情页只带最近 5 条流转，完整列表走 §5.5
+        orderAssembler.fillTimeline(vo, statusLogService.recentTimeline(order, DETAIL_TIMELINE_LIMIT));
+        return vo;
     }
 
     @Override
@@ -247,9 +260,14 @@ public class OrderServiceImpl implements OrderService {
         if (!workerId.equals(order.getWorkerId())) {
             throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
         }
-        return orderAssembler.toDetail(order, null, loadUser(order.getUserId()),
+        OrderDetailVO vo = orderAssembler.toDetail(order, null, loadUser(order.getUserId()),
                 actionResolver.resolveForWorker(order.getOrderStatus(), hasReview(orderNo, "WORKER")));
+        orderAssembler.fillTimeline(vo, statusLogService.recentTimeline(order, DETAIL_TIMELINE_LIMIT));
+        return vo;
     }
+
+    /** §5.4 timeline 字段条数上限 */
+    private static final int DETAIL_TIMELINE_LIMIT = 5;
 
     private List<String> orderNosOf(List<ServiceOrder> orders) {
         List<String> orderNos = new ArrayList<>(orders.size());
@@ -309,6 +327,35 @@ public class OrderServiceImpl implements OrderService {
         SysUser peer = loadUser(order.getUserId());
         return buildContact(order, "USER", peer, peer == null ? null : peer.getNickname(),
                 peer == null ? null : peer.getPhone());
+    }
+
+    // ---------------- §5.5 / §7.9 流转时间轴 ----------------
+
+    @Override
+    public OrderTimelineVO userTimeline(Long userId, String orderNo) {
+        ServiceOrder order = requireOrder(orderNo);
+        if (!userId.equals(order.getUserId())) {
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        return buildTimeline(order);
+    }
+
+    @Override
+    public OrderTimelineVO workerTimeline(Long workerId, String orderNo) {
+        ServiceOrder order = requireOrder(orderNo);
+        if (!workerId.equals(order.getWorkerId())) {
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        return buildTimeline(order);
+    }
+
+    /** 两端共用同一份组装逻辑（§5.5 备注 2 / §7.9 备注），只有权限校验方向不同 */
+    private OrderTimelineVO buildTimeline(ServiceOrder order) {
+        OrderTimelineVO vo = new OrderTimelineVO();
+        vo.setOrderNo(order.getOrderNo());
+        vo.setCurrentStatus(order.getOrderStatus());
+        vo.setNodes(statusLogService.timeline(order));
+        return vo;
     }
 
     /**
@@ -564,11 +611,14 @@ public class OrderServiceImpl implements OrderService {
         if (updated != 1) {
             throw new BizException(ErrorCode.ORDER_ALREADY_ACCEPTED);
         }
+        statusLogService.record(orderNo, OrderState.WAITING_ACCEPT.getCode(),
+                OrderState.ACCEPTED.getCode(), OrderEvent.ACCEPT.name(),
+                OrderStatusLogServiceImpl.OPERATOR_WORKER, workerId, null);
     }
 
     @Override
     @Transactional
-    public void start(Long workerId, String orderNo) {
+    public void start(Long workerId, String orderNo, StartServiceRequest request) {
         ServiceOrder order = requireOrder(orderNo);
         if (!workerId.equals(order.getWorkerId())) {
             throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
@@ -585,6 +635,37 @@ public class OrderServiceImpl implements OrderService {
         if (updated != 1) {
             throw new BizException(ErrorCode.ORDER_STATE_ILLEGAL);
         }
+
+        // §7.11：位置与订单 geo_hash 偏离过远不硬拦，只记入 remark 交管理端事后审查
+        String remark = buildStartRemark(order, request);
+        statusLogService.record(orderNo, OrderState.ACCEPTED.getCode(),
+                OrderState.IN_SERVICE.getCode(), OrderEvent.START.name(),
+                OrderStatusLogServiceImpl.OPERATOR_WORKER, workerId, remark);
+    }
+
+    /** 组装开始服务的日志备注：带上 GPS 与用户备注；偏离只在有 geo_hash 时做粗判 */
+    private String buildStartRemark(ServiceOrder order, StartServiceRequest request) {
+        StringBuilder sb = new StringBuilder();
+        if (request != null) {
+            if (StringUtils.hasText(request.getRemark())) {
+                sb.append(request.getRemark().trim());
+            }
+            if (StringUtils.hasText(request.getGpsLat()) && StringUtils.hasText(request.getGpsLng())) {
+                if (sb.length() > 0) {
+                    sb.append("；");
+                }
+                sb.append("定位 ").append(request.getGpsLat().trim())
+                        .append(",").append(request.getGpsLng().trim());
+            }
+            if (StringUtils.hasText(request.getAddress())) {
+                if (sb.length() > 0) {
+                    sb.append("；");
+                }
+                sb.append(request.getAddress().trim());
+            }
+        }
+        // remark 列长 255，超出截断避免插入失败
+        return sb.length() > 255 ? sb.substring(0, 255) : (sb.length() == 0 ? null : sb.toString());
     }
 
     @Override
@@ -615,6 +696,11 @@ public class OrderServiceImpl implements OrderService {
 
         // 事务提交后再投递 AI 报告任务，避免消费者读到未提交数据
         publishReportAfterCommit(orderNo);
+
+        statusLogService.record(orderNo, OrderState.IN_SERVICE.getCode(),
+                OrderState.PENDING_CONFIRM.getCode(), OrderEvent.FINISH.name(),
+                OrderStatusLogServiceImpl.OPERATOR_WORKER, workerId,
+                trimToNull(request.getServiceSummary()));
 
         FinishResultVO result = new FinishResultVO();
         result.setOrderNo(orderNo);
@@ -660,6 +746,9 @@ public class OrderServiceImpl implements OrderService {
         }
 
         walletService.settle(orderNo, order.getUserId(), order.getWorkerId(), order.getAmount());
+        statusLogService.record(orderNo, OrderState.PENDING_CONFIRM.getCode(),
+                OrderState.COMPLETED.getCode(), OrderEvent.USER_CONFIRM.name(),
+                OrderStatusLogServiceImpl.OPERATOR_USER, userId, null);
         // 订单完成：信用分 +2 并累计已完成单数（契约 §7.16 备注 1，事件驱动）
         creditService.change(order.getWorkerId(), CreditChangeType.ORDER_COMPLETED, orderNo, null);
         workerService.incrementServiceCount(order.getWorkerId());
@@ -668,23 +757,35 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public void cancel(Long userId, String orderNo) {
+        cancel(userId, orderNo, null);
+    }
+
+    @Override
+    @Transactional
+    public void cancel(Long userId, String orderNo, String reason) {
         ServiceOrder order = requireOrder(orderNo);
         if (!userId.equals(order.getUserId())) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
         stateMachineService.transition(OrderState.of(order.getOrderStatus()), OrderEvent.USER_CANCEL);
 
+        String cleanReason = trimToNull(reason);
         int updated = orderMapper.update(null, new LambdaUpdateWrapper<ServiceOrder>()
                 .eq(ServiceOrder::getId, order.getId())
                 .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode())
                 .eq(ServiceOrder::getVersion, order.getVersion())
                 .set(ServiceOrder::getOrderStatus, OrderState.CANCELLED.getCode())
+                // §5.7 阶段 1.5 新增取消原因，供详情页与时间轴展示
+                .set(ServiceOrder::getCancelReason, cleanReason)
                 .set(ServiceOrder::getVersion, order.getVersion() + 1));
         if (updated != 1) {
             throw new BizException(ErrorCode.ORDER_STATE_ILLEGAL);
         }
 
         walletService.unfreeze(userId, orderNo, order.getAmount());
+        statusLogService.record(orderNo, OrderState.WAITING_ACCEPT.getCode(),
+                OrderState.CANCELLED.getCode(), OrderEvent.USER_CANCEL.name(),
+                OrderStatusLogServiceImpl.OPERATOR_USER, userId, cleanReason);
     }
 
     @Override

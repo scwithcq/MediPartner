@@ -4,11 +4,13 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
+import com.dsc.medipartner.module.order.domain.dto.StartServiceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderTimelineVO;
 import com.dsc.medipartner.module.order.domain.vo.PricePreviewVO;
 
 public interface OrderService {
@@ -41,12 +43,17 @@ public interface OrderService {
     /** §5.6 联系陪诊师（脱敏 + 稳定虚拟号；仅本人订单） */
     ContactVO userContact(Long userId, String orderNo);
 
+    /** §5.5 订单流转时间轴（仅本人订单） */
+    OrderTimelineVO userTimeline(Long userId, String orderNo);
+
+    /** §7.9 陪诊师侧流转时间轴（仅本人接的单） */
+    OrderTimelineVO workerTimeline(Long workerId, String orderNo);
+
     /** §7.10 联系求助者（脱敏 + 稳定虚拟号；仅本人接的单） */
     ContactVO workerContact(Long workerId, String orderNo);
 
     /** §3.3 各状态订单数（「我的」页聚合用） */
     java.util.Map<String, Long> countByStatusForUser(Long userId);
-
     /** §7.1 今日待服务订单数（serviceTime 落在今天且状态 20） */
     long countTodayPending(Long workerId);
 
@@ -64,7 +71,8 @@ public interface OrderService {
 
     void accept(Long workerId, String orderNo);
 
-    void start(Long workerId, String orderNo);
+    /** §7.11 开始服务：写入 GPS 与到场信息，落流转日志（位置偏离只记不拦） */
+    void start(Long workerId, String orderNo, StartServiceRequest request);
 
     /** 结束服务（契约 §7.14）：落 1~3 张结束凭证、写服务小结与实际时长，状态 30->40，提交后异步触发 AI 报告 */
     FinishResultVO finish(Long workerId, String orderNo, FinishOrderRequest request);
@@ -72,6 +80,9 @@ public interface OrderService {
     void confirm(Long userId, String orderNo);
 
     void cancel(Long userId, String orderNo);
+
+    /** §5.7 取消订单（带取消原因，阶段 1.5 新增入参） */
+    void cancel(Long userId, String orderNo, String reason);
 
     long countActive(Long workerId);
 }

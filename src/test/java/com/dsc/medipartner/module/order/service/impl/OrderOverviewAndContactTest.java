@@ -16,6 +16,7 @@ import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.ActionResolver;
 import com.dsc.medipartner.module.order.service.OrderAssembler;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
+import com.dsc.medipartner.module.order.service.OrderStatusLogService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.order.service.VirtualPhoneService;
@@ -70,7 +71,7 @@ class OrderOverviewAndContactTest {
                 mock(OrderStateMachineService.class), mock(TraceService.class), mock(ReportTaskPublisher.class),
                 mock(DemandService.class), mock(CreditService.class), priceService, userService,
                 mock(ReviewService.class), new ActionResolver(), new OrderAssembler(),
-                new VirtualPhoneService());
+                new VirtualPhoneService(), mock(OrderStatusLogService.class));
     }
 
     private PriceResult priced() {

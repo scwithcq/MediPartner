@@ -17,6 +17,7 @@ import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.ActionResolver;
 import com.dsc.medipartner.module.order.service.OrderAssembler;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
+import com.dsc.medipartner.module.order.service.OrderStatusLogService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.order.service.VirtualPhoneService;
@@ -74,6 +75,7 @@ class OrderServiceImplTest {
     private ReviewService reviewService;
     private ActionResolver actionResolver;
     private OrderAssembler orderAssembler;
+    private OrderStatusLogService statusLogService;
     private OrderServiceImpl service;
 
     @BeforeAll
@@ -96,9 +98,11 @@ class OrderServiceImplTest {
         reviewService = mock(ReviewService.class);
         actionResolver = new ActionResolver();
         orderAssembler = new OrderAssembler();
+        statusLogService = mock(OrderStatusLogService.class);
         service = new OrderServiceImpl(orderMapper, walletService, workerService, stateMachineService,
                 traceService, reportTaskPublisher, demandService, creditService, priceService,
-                userService, reviewService, actionResolver, orderAssembler, new VirtualPhoneService());
+                userService, reviewService, actionResolver, orderAssembler, new VirtualPhoneService(),
+                statusLogService);
     }
 
     @AfterEach
@@ -325,8 +329,18 @@ class OrderServiceImplTest {
     @Test
     void startRejectsNonOwnerWith3008() {
         when(orderMapper.selectOne(any())).thenReturn(order(OrderState.ACCEPTED.getCode(), USER_ID, 999L));
-        assertThatThrownBy(() -> service.start(WORKER_ID, ORDER_NO))
+        assertThatThrownBy(() -> service.start(WORKER_ID, ORDER_NO, startRequest()))
                 .isInstanceOfSatisfying(BizException.class,
                         e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.ORDER_NOT_BELONG_TO_USER));
+    }
+
+    /** §7.11 开始服务入参：GPS 必填 */
+    private com.dsc.medipartner.module.order.domain.dto.StartServiceRequest startRequest() {
+        com.dsc.medipartner.module.order.domain.dto.StartServiceRequest request =
+                new com.dsc.medipartner.module.order.domain.dto.StartServiceRequest();
+        request.setGpsLat("29.563010");
+        request.setGpsLng("106.551640");
+        request.setAddress("重医附一院门诊大厅");
+        return request;
     }
 }

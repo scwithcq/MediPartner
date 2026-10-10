@@ -9,12 +9,14 @@ import com.dsc.medipartner.common.result.ErrorCode;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.ai.domain.vo.ReportVO;
 import com.dsc.medipartner.module.ai.service.ReportService;
+import com.dsc.medipartner.module.order.domain.dto.CancelOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderTimelineVO;
 import com.dsc.medipartner.module.order.domain.vo.PricePreviewVO;
 import com.dsc.medipartner.module.order.domain.vo.TraceVO;
 import com.dsc.medipartner.module.order.service.OrderService;
@@ -63,8 +65,10 @@ public class OrderController {
     }
 
     @PostMapping("/{orderNo}/cancel")
-    public R<Void> cancel(@PathVariable String orderNo) {
-        orderService.cancel(UserContext.userId(), orderNo);
+    public R<Void> cancel(@PathVariable String orderNo,
+                          @RequestBody(required = false) CancelOrderRequest request) {
+        String reason = request == null ? null : request.getReason();
+        orderService.cancel(UserContext.userId(), orderNo, reason);
         return R.ok();
     }
 
@@ -86,6 +90,12 @@ public class OrderController {
     @GetMapping("/{orderNo}/contact")
     public R<ContactVO> contact(@PathVariable String orderNo) {
         return R.ok(orderService.userContact(UserContext.userId(), orderNo));
+    }
+
+    /** §5.5 订单流转时间轴：nodes 按时间升序；存量订单由服务端反推补齐 */
+    @GetMapping("/{orderNo}/timeline")
+    public R<OrderTimelineVO> timeline(@PathVariable String orderNo) {
+        return R.ok(orderService.userTimeline(UserContext.userId(), orderNo));
     }
 
     /** §5.9 查看本单服务留痕（TRACE + VOUCHER），createdAt 倒序；归属校验后放行 */

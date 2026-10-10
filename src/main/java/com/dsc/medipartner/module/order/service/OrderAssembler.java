@@ -73,6 +73,11 @@ public class OrderAssembler {
         return vo;
     }
 
+    /** 由调用方注入时间轴（详情页只取最近 5 条，§5.4） */
+    public void fillTimeline(OrderDetailVO vo, java.util.List<com.dsc.medipartner.module.order.domain.vo.OrderTimelineNodeVO> nodes) {
+        vo.setTimeline(nodes);
+    }
+
     /** 卡片与详情共有的字段 */
     private void fillCommon(OrderCardVO vo, ServiceOrder order, List<String> actions) {
         vo.setOrderNo(order.getOrderNo());

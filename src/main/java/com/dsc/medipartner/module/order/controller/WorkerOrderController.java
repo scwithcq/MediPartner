@@ -7,12 +7,14 @@ import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
+import com.dsc.medipartner.module.order.domain.dto.StartServiceRequest;
 import com.dsc.medipartner.module.order.domain.dto.UploadTraceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderTimelineVO;
 import com.dsc.medipartner.module.order.domain.vo.TraceVO;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.TraceService;
@@ -61,9 +63,16 @@ public class WorkerOrderController {
         return R.ok(orderService.getWorkerOrderDetail(UserContext.userId(), orderNo));
     }
 
+    /** §7.9 陪诊师侧流转时间轴：结构与 §5.5 完全一致，只有权限方向不同 */
+    @GetMapping("/{orderNo}/timeline")
+    public R<OrderTimelineVO> timeline(@PathVariable String orderNo) {
+        return R.ok(orderService.workerTimeline(UserContext.userId(), orderNo));
+    }
+
     @PostMapping("/{orderNo}/start")
-    public R<Void> start(@PathVariable String orderNo) {
-        orderService.start(UserContext.userId(), orderNo);
+    public R<Void> start(@PathVariable String orderNo,
+                         @Valid @RequestBody StartServiceRequest request) {
+        orderService.start(UserContext.userId(), orderNo, request);
         return R.ok();
     }
 

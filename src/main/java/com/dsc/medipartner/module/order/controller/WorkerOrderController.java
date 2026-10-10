@@ -6,6 +6,7 @@ import com.dsc.medipartner.common.result.PageResult;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.UploadTraceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
@@ -34,8 +35,8 @@ public class WorkerOrderController {
     }
 
     @GetMapping("/hall")
-    public R<PageResult<ServiceOrder>> hall(PageQuery query) {
-        IPage<ServiceOrder> page = orderService.pageHall(query.getPageNum(), query.getPageSize());
+    public R<PageResult<ServiceOrder>> hall(OrderQuery query) {
+        IPage<ServiceOrder> page = orderService.pageHall(query);
         return R.ok(PageResult.of(page));
     }
 
@@ -46,9 +47,8 @@ public class WorkerOrderController {
     }
 
     @GetMapping("/list")
-    public R<PageResult<ServiceOrder>> list(@RequestParam(required = false) Integer orderStatus, PageQuery query) {
-        IPage<ServiceOrder> page = orderService.pageWorkerOrders(
-                UserContext.userId(), orderStatus, query.getPageNum(), query.getPageSize());
+    public R<PageResult<ServiceOrder>> list(OrderQuery query) {
+        IPage<ServiceOrder> page = orderService.pageWorkerOrders(UserContext.userId(), query);
         return R.ok(PageResult.of(page));
     }
 

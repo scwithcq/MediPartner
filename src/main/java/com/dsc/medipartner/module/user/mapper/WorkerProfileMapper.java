@@ -37,8 +37,8 @@ public interface WorkerProfileMapper extends BaseMapper<WorkerProfile> {
                      OR p.intro LIKE CONCAT('%', #{q.keyword}, '%'))
             </if>
             <choose>
-                <when test="q.sortBy == 'serviceCount'"> ORDER BY p.service_count</when>
-                <when test="q.sortBy == 'creditScore'"> ORDER BY p.credit_score</when>
+                <when test="q.sortProperty() == 'serviceCount'"> ORDER BY p.service_count</when>
+                <when test="q.sortProperty() == 'creditScore'"> ORDER BY p.credit_score</when>
                 <otherwise> ORDER BY p.good_rate</otherwise>
             </choose>
             <choose>

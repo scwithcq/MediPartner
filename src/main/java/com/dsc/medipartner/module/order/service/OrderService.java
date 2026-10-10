@@ -3,6 +3,7 @@ package com.dsc.medipartner.module.order.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 
@@ -12,11 +13,14 @@ public interface OrderService {
 
     ServiceOrder getByOrderNo(String orderNo);
 
-    IPage<ServiceOrder> pageUserOrders(Long userId, Integer orderStatus, long pageNum, long pageSize);
+    /** §5.3 我的订单列表：支持 orderStatus/statusGroup/keyword/排序白名单/updatedSince */
+    IPage<ServiceOrder> pageUserOrders(Long userId, OrderQuery query);
 
-    IPage<ServiceOrder> pageHall(long pageNum, long pageSize);
+    /** §7.5 接单大厅列表：默认 serviceTime asc */
+    IPage<ServiceOrder> pageHall(OrderQuery query);
 
-    IPage<ServiceOrder> pageWorkerOrders(Long workerId, Integer orderStatus, long pageNum, long pageSize);
+    /** §7.7 陪诊师接单列表 */
+    IPage<ServiceOrder> pageWorkerOrders(Long workerId, OrderQuery query);
 
     void accept(Long workerId, String orderNo);
 

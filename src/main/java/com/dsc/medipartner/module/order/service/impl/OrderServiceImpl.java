@@ -6,12 +6,15 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
+import com.dsc.medipartner.common.result.PageQuery;
+import com.dsc.medipartner.common.result.SortWhitelist;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.common.util.OrderNoGenerator;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.PriceResult;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderEvent;
@@ -27,6 +30,7 @@ import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
 import com.dsc.medipartner.module.user.service.CreditService;
 import com.dsc.medipartner.module.user.service.WorkerService;
 import com.dsc.medipartner.module.wallet.service.WalletService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,7 +39,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.List;
+import java.util.Locale;
 
+@Slf4j
 @Service
 public class OrderServiceImpl implements OrderService {
 
@@ -53,6 +62,9 @@ public class OrderServiceImpl implements OrderService {
     private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
     /** 服务时间需早于当前时间 30 天（契约 §5.2） */
     private static final long MAX_SERVICE_TIME_AHEAD_DAYS = 30;
+    /** §1.9 增量轮询时间格式 */
+    private static final DateTimeFormatter UPDATED_SINCE_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @Value("${medi.order.max-active-orders:3}")
     private int maxActiveOrders;
@@ -150,32 +162,99 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public IPage<ServiceOrder> pageUserOrders(Long userId, Integer orderStatus, long pageNum, long pageSize) {
-        Page<ServiceOrder> page = new Page<>(pageNum, pageSize);
-        LambdaQueryWrapper<ServiceOrder> query = new LambdaQueryWrapper<ServiceOrder>()
-                .eq(ServiceOrder::getUserId, userId)
-                .eq(orderStatus != null, ServiceOrder::getOrderStatus, orderStatus)
-                .orderByDesc(ServiceOrder::getCreatedAt);
-        return orderMapper.selectPage(page, query);
+    public IPage<ServiceOrder> pageUserOrders(Long userId, OrderQuery query) {
+        LambdaQueryWrapper<ServiceOrder> wrapper = new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getUserId, userId);
+        applyOrderFilters(wrapper, query);
+        applySort(wrapper, query, SortWhitelist.Spec.ORDER_LIST);
+        return orderMapper.selectPage(newPage(query), wrapper);
     }
 
     @Override
-    public IPage<ServiceOrder> pageHall(long pageNum, long pageSize) {
-        Page<ServiceOrder> page = new Page<>(pageNum, pageSize);
-        LambdaQueryWrapper<ServiceOrder> query = new LambdaQueryWrapper<ServiceOrder>()
-                .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode())
-                .orderByAsc(ServiceOrder::getCreatedAt);
-        return orderMapper.selectPage(page, query);
+    public IPage<ServiceOrder> pageHall(OrderQuery query) {
+        LambdaQueryWrapper<ServiceOrder> wrapper = new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode());
+        applyOrderFilters(wrapper, query);
+        applySort(wrapper, query, SortWhitelist.Spec.ORDER_HALL_ASC);
+        return orderMapper.selectPage(newPage(query), wrapper);
     }
 
     @Override
-    public IPage<ServiceOrder> pageWorkerOrders(Long workerId, Integer orderStatus, long pageNum, long pageSize) {
-        Page<ServiceOrder> page = new Page<>(pageNum, pageSize);
-        LambdaQueryWrapper<ServiceOrder> query = new LambdaQueryWrapper<ServiceOrder>()
-                .eq(ServiceOrder::getWorkerId, workerId)
-                .eq(orderStatus != null, ServiceOrder::getOrderStatus, orderStatus)
-                .orderByDesc(ServiceOrder::getCreatedAt);
-        return orderMapper.selectPage(page, query);
+    public IPage<ServiceOrder> pageWorkerOrders(Long workerId, OrderQuery query) {
+        LambdaQueryWrapper<ServiceOrder> wrapper = new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getWorkerId, workerId);
+        applyOrderFilters(wrapper, query);
+        applySort(wrapper, query, SortWhitelist.Spec.ORDER_LIST);
+        return orderMapper.selectPage(newPage(query), wrapper);
+    }
+
+    /**
+     * 状态与关键词筛选（§5.3、§7.7）。
+     * {@code orderStatus} 与 {@code statusGroup} 互斥，同传时以 {@code orderStatus} 为准。
+     */
+    private void applyOrderFilters(LambdaQueryWrapper<ServiceOrder> wrapper, OrderQuery query) {
+        if (query.getOrderStatus() != null) {
+            wrapper.eq(ServiceOrder::getOrderStatus, query.getOrderStatus());
+        } else if (StringUtils.hasText(query.getStatusGroup())) {
+            List<Integer> statuses = resolveStatusGroup(query.getStatusGroup());
+            if (statuses != null) {
+                wrapper.in(ServiceOrder::getOrderStatus, statuses);
+            }
+        }
+        if (StringUtils.hasText(query.getKeyword())) {
+            String kw = query.getKeyword().trim();
+            wrapper.and(w -> w.like(ServiceOrder::getOrderNo, kw)
+                    .or().like(ServiceOrder::getCity, kw)
+                    .or().like(ServiceOrder::getSymptomDesc, kw));
+        }
+        applyUpdatedSince(wrapper, query.getUpdatedSince());
+    }
+
+    /** §5.3 状态分组：PROCESSING(10,20,30,40) / FINISHED(50) / CLOSED(60,70)；未知值返回 null（不筛选） */
+    private List<Integer> resolveStatusGroup(String statusGroup) {
+        return switch (statusGroup.trim().toUpperCase(Locale.ROOT)) {
+            case "PROCESSING" -> List.of(OrderState.WAITING_ACCEPT.getCode(), OrderState.ACCEPTED.getCode(),
+                    OrderState.IN_SERVICE.getCode(), OrderState.PENDING_CONFIRM.getCode());
+            case "FINISHED" -> List.of(OrderState.COMPLETED.getCode());
+            case "CLOSED" -> List.of(OrderState.CANCELLED.getCode(), OrderState.ABNORMAL.getCode());
+            default -> null;
+        };
+    }
+
+    /**
+     * 排序落地（§1.8）：列名只可能来自 {@link SortWhitelist} 枚举常量，
+     * 前端原始字符串绝不进入 SQL。非法 sortBy 已在 resolve 内回落默认值，不报错。
+     */
+    private void applySort(LambdaQueryWrapper<ServiceOrder> wrapper, PageQuery query,
+                           SortWhitelist.Spec spec) {
+        SortWhitelist.Order order = spec.resolve(query.getSortBy(), query.getOrder());
+        wrapper.last("ORDER BY " + order.sqlColumn() + (order.asc() ? " ASC" : " DESC")
+                + ", id DESC");
+    }
+
+    /** §1.9 增量轮询：只返回 updated_at 严格大于 updatedSince 的记录 */
+    private void applyUpdatedSince(LambdaQueryWrapper<ServiceOrder> wrapper, String updatedSince) {
+        LocalDateTime since = parseUpdatedSince(updatedSince);
+        if (since != null) {
+            wrapper.gt(ServiceOrder::getUpdatedAt, since);
+        }
+    }
+
+    private LocalDateTime parseUpdatedSince(String updatedSince) {
+        if (!StringUtils.hasText(updatedSince)) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(updatedSince.trim(), UPDATED_SINCE_FORMAT);
+        } catch (DateTimeParseException e) {
+            // §1.3：格式非法时忽略该参数，不报错
+            log.warn("[order] updatedSince 格式非法，已忽略: {}", updatedSince);
+            return null;
+        }
+    }
+
+    private Page<ServiceOrder> newPage(PageQuery query) {
+        return new Page<>(query.getEffectivePageNum(), query.getEffectivePageSize());
     }
 
     @Override

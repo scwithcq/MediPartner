@@ -10,6 +10,7 @@ import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.ai.domain.vo.ReportVO;
 import com.dsc.medipartner.module.ai.service.ReportService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.vo.TraceVO;
 import com.dsc.medipartner.module.order.service.OrderService;
@@ -51,9 +52,8 @@ public class OrderController {
     }
 
     @GetMapping("/list")
-    public R<PageResult<ServiceOrder>> list(@RequestParam(required = false) Integer orderStatus, PageQuery query) {
-        IPage<ServiceOrder> page = orderService.pageUserOrders(
-                UserContext.userId(), orderStatus, query.getPageNum(), query.getPageSize());
+    public R<PageResult<ServiceOrder>> list(OrderQuery query) {
+        IPage<ServiceOrder> page = orderService.pageUserOrders(UserContext.userId(), query);
         return R.ok(PageResult.of(page));
     }
 

@@ -6,7 +6,9 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
+import com.dsc.medipartner.common.result.SortWhitelist;
 import com.dsc.medipartner.common.util.OrderNoGenerator;
+import com.dsc.medipartner.module.wallet.domain.dto.TransactionQuery;
 import com.dsc.medipartner.module.wallet.domain.entity.WalletAccount;
 import com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction;
 import com.dsc.medipartner.module.wallet.domain.enums.TxnTypeEnum;
@@ -17,14 +19,21 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Locale;
 
 @Slf4j
 @Service
 public class WalletServiceImpl implements WalletService {
 
     private static final int MAX_RETRY = 3;
+    private static final DateTimeFormatter UPDATED_SINCE_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final WalletAccountMapper accountMapper;
     private final WalletTransactionMapper transactionMapper;
@@ -40,12 +49,39 @@ public class WalletServiceImpl implements WalletService {
     }
 
     @Override
-    public IPage<WalletTransaction> pageTransactions(Long userId, long pageNum, long pageSize) {
-        Page<WalletTransaction> page = new Page<>(pageNum, pageSize);
-        LambdaQueryWrapper<WalletTransaction> query = new LambdaQueryWrapper<WalletTransaction>()
+    public IPage<WalletTransaction> pageTransactions(Long userId, TransactionQuery query) {
+        LambdaQueryWrapper<WalletTransaction> wrapper = new LambdaQueryWrapper<WalletTransaction>()
                 .eq(WalletTransaction::getUserId, userId)
-                .orderByDesc(WalletTransaction::getCreatedAt);
-        return transactionMapper.selectPage(page, query);
+                .eq(StringUtils.hasText(query.getType()), WalletTransaction::getType,
+                        query.getType() == null ? null : query.getType().trim().toUpperCase(Locale.ROOT))
+                .eq(StringUtils.hasText(query.getOrderNo()), WalletTransaction::getOrderNo, query.getOrderNo());
+
+        // §1.9 增量轮询：updated_at 严格大于 updatedSince（该表只有 created_at，故以 createdAt 为口径）
+        LocalDateTime since = parseUpdatedSince(query.getUpdatedSince());
+        if (since != null) {
+            wrapper.gt(WalletTransaction::getCreatedAt, since);
+        }
+
+        // §1.8 白名单：列名只可能来自枚举常量，前端原始字符串绝不进入 SQL
+        SortWhitelist.Order order = SortWhitelist.Spec.WALLET_TXN
+                .resolve(query.getSortBy(), query.getOrder());
+        wrapper.last("ORDER BY " + order.sqlColumn() + (order.asc() ? " ASC" : " DESC") + ", id DESC");
+
+        Page<WalletTransaction> page = new Page<>(query.getEffectivePageNum(), query.getEffectivePageSize());
+        return transactionMapper.selectPage(page, wrapper);
+    }
+
+    private LocalDateTime parseUpdatedSince(String updatedSince) {
+        if (!StringUtils.hasText(updatedSince)) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(updatedSince.trim(), UPDATED_SINCE_FORMAT);
+        } catch (DateTimeParseException e) {
+            // 格式非法忽略该参数，不报错（§1.3 容错语义）
+            log.warn("[wallet] updatedSince 格式非法，已忽略: {}", updatedSince);
+            return null;
+        }
     }
 
     @Override

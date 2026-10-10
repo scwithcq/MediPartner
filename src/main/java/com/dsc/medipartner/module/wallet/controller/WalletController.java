@@ -1,10 +1,10 @@
 package com.dsc.medipartner.module.wallet.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.dsc.medipartner.common.result.PageQuery;
 import com.dsc.medipartner.common.result.PageResult;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
+import com.dsc.medipartner.module.wallet.domain.dto.TransactionQuery;
 import com.dsc.medipartner.module.wallet.domain.entity.WalletAccount;
 import com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction;
 import com.dsc.medipartner.module.wallet.service.WalletService;
@@ -28,9 +28,8 @@ public class WalletController {
     }
 
     @GetMapping("/transactions")
-    public R<PageResult<WalletTransaction>> transactions(PageQuery query) {
-        IPage<WalletTransaction> page = walletService.pageTransactions(
-                UserContext.userId(), query.getPageNum(), query.getPageSize());
+    public R<PageResult<WalletTransaction>> transactions(TransactionQuery query) {
+        IPage<WalletTransaction> page = walletService.pageTransactions(UserContext.userId(), query);
         return R.ok(PageResult.of(page));
     }
 }

@@ -12,6 +12,8 @@ import com.dsc.medipartner.module.wallet.domain.dto.TransactionQuery;
 import com.dsc.medipartner.module.wallet.domain.entity.WalletAccount;
 import com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction;
 import com.dsc.medipartner.module.wallet.domain.enums.TxnTypeEnum;
+import com.dsc.medipartner.module.wallet.domain.vo.TransactionVO;
+import com.dsc.medipartner.module.wallet.domain.vo.WalletVO;
 import com.dsc.medipartner.module.wallet.mapper.WalletAccountMapper;
 import com.dsc.medipartner.module.wallet.mapper.WalletTransactionMapper;
 import com.dsc.medipartner.module.wallet.service.WalletService;
@@ -25,6 +27,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 @Slf4j
@@ -46,6 +50,57 @@ public class WalletServiceImpl implements WalletService {
     @Override
     public WalletAccount getAccount(Long userId) {
         return getOrCreate(userId);
+    }
+
+    /** §3.6 钱包账户 VO：不暴露 id/version，可用余额由服务端算好（前端不自己相减） */
+    @Override
+    public WalletVO getAccountVO(Long userId) {
+        WalletAccount account = getOrCreate(userId);
+        return toWalletVO(account);
+    }
+
+    private WalletVO toWalletVO(WalletAccount account) {
+        WalletVO vo = new WalletVO();
+        vo.setUserId(account.getUserId());
+        BigDecimal balance = nz(account.getBalance());
+        BigDecimal frozen = nz(account.getFrozen());
+        vo.setBalance(balance);
+        vo.setFrozen(frozen);
+        // 附录 B.3：可用余额 = 总余额 - 冻结额
+        vo.setAvailableBalance(balance.subtract(frozen));
+        vo.setTotalIncome(nz(account.getTotalIncome()));
+        vo.setTotalExpense(nz(account.getTotalExpense()));
+        vo.setWithdrawing(nz(account.getWithdrawing()));
+        vo.setUpdatedAt(account.getUpdatedAt());
+        return vo;
+    }
+
+    /** §3.7 资金流水 VO：补 typeName 中文名与 direction 方向 */
+    @Override
+    public IPage<TransactionVO> pageTransactionVOs(Long userId, TransactionQuery query) {
+        IPage<WalletTransaction> page = pageTransactions(userId, query);
+        List<TransactionVO> records = new ArrayList<>(page.getRecords().size());
+        for (WalletTransaction txn : page.getRecords()) {
+            records.add(toTransactionVO(txn));
+        }
+        Page<TransactionVO> result = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
+        result.setRecords(records);
+        return result;
+    }
+
+    private TransactionVO toTransactionVO(WalletTransaction txn) {
+        TransactionVO vo = new TransactionVO();
+        vo.setTxnNo(txn.getTxnNo());
+        vo.setType(txn.getType());
+        vo.setTypeName(TxnTypeEnum.nameOf(txn.getType()));
+        vo.setDirection(TxnTypeEnum.directionOf(txn.getType()));
+        vo.setAmount(txn.getAmount());
+        vo.setBalanceAfter(txn.getBalanceAfter());
+        vo.setFrozenAfter(txn.getFrozenAfter());
+        vo.setOrderNo(txn.getOrderNo());
+        vo.setRemark(txn.getRemark());
+        vo.setCreatedAt(txn.getCreatedAt());
+        return vo;
     }
 
     @Override

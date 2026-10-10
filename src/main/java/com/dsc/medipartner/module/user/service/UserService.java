@@ -1,6 +1,7 @@
 package com.dsc.medipartner.module.user.service;
 
 import com.dsc.medipartner.module.user.domain.entity.SysUser;
+import com.dsc.medipartner.module.user.domain.vo.UserOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.UserVO;
 
 import java.util.Collection;
@@ -24,4 +25,7 @@ public interface UserService {
      * {@code phone} 走 {@code DesensitizeUtil} 脱敏；用户不存在抛 2001。
      */
     UserVO getProfile(Long userId);
+
+    /** §3.3 「我的」页聚合：一次返回用户、钱包摘要、各状态订单数与入驻入口 */
+    UserOverviewVO getOverview(Long userId);
 }

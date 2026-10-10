@@ -9,6 +9,7 @@ import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.UploadTraceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
+import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
@@ -64,6 +65,12 @@ public class WorkerOrderController {
     public R<Void> start(@PathVariable String orderNo) {
         orderService.start(UserContext.userId(), orderNo);
         return R.ok();
+    }
+
+    /** §7.10 联系求助者：脱敏 + 稳定虚拟号（与用户侧查到的是同一个号） */
+    @GetMapping("/{orderNo}/contact")
+    public R<ContactVO> contact(@PathVariable String orderNo) {
+        return R.ok(orderService.workerContact(UserContext.userId(), orderNo));
     }
 
     /** §7.12 上传过程留痕：仅服务中订单，每单 TRACE 上限 20 条 */

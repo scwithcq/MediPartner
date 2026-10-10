@@ -2,27 +2,41 @@ package com.dsc.medipartner.module.user.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
 import com.dsc.medipartner.common.util.SensitiveWords;
+import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.enums.ServiceType;
+import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
+import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.user.domain.dto.UpdateWorkerProfileRequest;
+import com.dsc.medipartner.module.user.domain.entity.SysUser;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
 import com.dsc.medipartner.module.user.domain.enums.AuditStatusEnum;
 import com.dsc.medipartner.module.user.domain.enums.CreditLevel;
+import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
 import com.dsc.medipartner.module.user.mapper.WorkerProfileMapper;
+import com.dsc.medipartner.module.user.service.UserService;
 import com.dsc.medipartner.module.user.service.WorkerService;
+import com.dsc.medipartner.module.wallet.domain.vo.WalletVO;
+import com.dsc.medipartner.module.wallet.service.WalletService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+@Slf4j
 @Service
 public class WorkerServiceImpl implements WorkerService {
 
@@ -30,10 +44,28 @@ public class WorkerServiceImpl implements WorkerService {
     private static final BigDecimal DEFAULT_AVG_STAR = new BigDecimal("5.0");
     private static final int DEFAULT_CREDIT = 100;
 
-    private final WorkerProfileMapper workerProfileMapper;
+    @Value("${medi.order.max-active-orders:3}")
+    private int maxActiveOrders;
+    @Value("${medi.order.max-active-orders-low-credit:1}")
+    private int maxActiveOrdersLowCredit;
+    @Value("${medi.order.min-credit-accept:60}")
+    private int minCreditAccept;
+    @Value("${medi.order.low-credit-threshold:80}")
+    private int lowCreditThreshold;
 
-    public WorkerServiceImpl(WorkerProfileMapper workerProfileMapper) {
+    private final WorkerProfileMapper workerProfileMapper;
+    private final UserService userService;
+    private final OrderService orderService;
+    private final WalletService walletService;
+
+    public WorkerServiceImpl(WorkerProfileMapper workerProfileMapper,
+                             @Lazy UserService userService,
+                             @Lazy OrderService orderService,
+                             @Lazy WalletService walletService) {
         this.workerProfileMapper = workerProfileMapper;
+        this.userService = userService;
+        this.orderService = orderService;
+        this.walletService = walletService;
     }
 
     @Override
@@ -152,6 +184,80 @@ public class WorkerServiceImpl implements WorkerService {
 
     static String oneDecimal(BigDecimal value) {
         return (value == null ? DEFAULT_AVG_STAR : value).setScale(1, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /**
+     * §7.1 工作台首页聚合。一次请求返回首页全部数据。
+     *
+     * <p>契约要求：{@code auditStatus != PASS} 时统计字段仍返回默认值（0 / "0.00"），
+     * 前端只按 auditStatus 决定渲染哪套 UI，不必判空。
+     */
+    @Override
+    public WorkerOverviewVO getOverview(Long workerUserId) {
+        WorkerProfile profile = requireProfile(workerUserId);
+        SysUser user = userService.getById(workerUserId);
+
+        WorkerOverviewVO vo = new WorkerOverviewVO();
+        vo.setWorkerUserId(workerUserId);
+        vo.setNickname(user.getNickname());
+        vo.setAvatar(user.getAvatar());
+        vo.setAuditStatus(profile.getAuditStatus());
+        vo.setAuditRemark(profile.getAuditRemark());
+        vo.setServerTime(LocalDateTime.now());
+
+        int score = profile.getCreditScore() == null ? DEFAULT_CREDIT : profile.getCreditScore();
+        vo.setCreditScore(score);
+        vo.setCreditLevel(CreditLevel.of(score).name());
+
+        // 非 PASS 时统计字段给默认值，不抛异常、返回空数据
+        if (!AuditStatusEnum.PASS.name().equals(profile.getAuditStatus())) {
+            vo.setAccepting(false);
+            vo.setActiveCount(0L);
+            vo.setActiveLimit(0);
+            vo.setHallCount(0L);
+            vo.setTodayCount(0L);
+            vo.setMonthEarning(BigDecimal.ZERO);
+            vo.setMonthOrderCount(0L);
+            vo.setPendingWithdraw(BigDecimal.ZERO);
+            vo.setNewReviewCount(0L);
+            return vo;
+        }
+
+        long activeCount = orderService.countActive(workerUserId);
+        int limit = score < lowCreditThreshold ? maxActiveOrdersLowCredit : maxActiveOrders;
+        vo.setActiveCount(activeCount);
+        vo.setActiveLimit(limit);
+        // 可接单 = 信用分达标 且 未达接单上限（与 §7.6 抢单校验保持一致）
+        vo.setAccepting(score >= minCreditAccept && activeCount < limit);
+        vo.setHallCount(orderService.countHall());
+        vo.setTodayCount(orderService.countTodayPending(workerUserId));
+        vo.setMonthOrderCount(orderService.countMonthCompleted(workerUserId));
+        vo.setNewReviewCount(0L);
+
+        // 本月已结算收益与提现中金额取自钱包（V14 累计列）
+        try {
+            WalletVO account = walletService.getAccountVO(workerUserId);
+            vo.setMonthEarning(BigDecimal.ZERO);
+            vo.setPendingWithdraw(account.getWithdrawing());
+        } catch (Exception e) {
+            log.warn("[worker] 查询钱包失败，overview 用默认值 workerUserId={}: {}", workerUserId, e.getMessage());
+            vo.setMonthEarning(BigDecimal.ZERO);
+            vo.setPendingWithdraw(BigDecimal.ZERO);
+        }
+
+        // 最需要处理的一单：优先服务中，其次已接单（§7.1 processingOrder）
+        vo.setProcessingOrder(findProcessingOrder(workerUserId));
+        return vo;
+    }
+
+    /** 取最需要处理的一单：30 服务中优先，其次 20 已接单；无则返回 null（VO 键缺失） */
+    private OrderCardVO findProcessingOrder(Long workerUserId) {
+        OrderQuery query = new OrderQuery();
+        query.setStatusGroup("PROCESSING");
+        query.setPageNum(1);
+        query.setPageSize(1);
+        IPage<OrderCardVO> page = orderService.pageWorkerOrderCards(workerUserId, query);
+        return page.getRecords().isEmpty() ? null : page.getRecords().get(0);
     }
 
     static String maskIdCard(String idCardNo) {

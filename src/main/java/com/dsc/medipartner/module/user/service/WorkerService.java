@@ -2,6 +2,7 @@ package com.dsc.medipartner.module.user.service;
 
 import com.dsc.medipartner.module.user.domain.dto.UpdateWorkerProfileRequest;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
+import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
 
 import java.math.BigDecimal;
@@ -21,4 +22,7 @@ public interface WorkerService {
 
     /** 订单确认后已完成单数 +1 */
     void incrementServiceCount(Long workerUserId);
+
+    /** §7.1 工作台首页聚合：昵称、信用、接单能力、各类计数与本月收益 */
+    WorkerOverviewVO getOverview(Long workerUserId);
 }

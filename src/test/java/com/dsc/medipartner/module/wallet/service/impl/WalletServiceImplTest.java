@@ -322,4 +322,85 @@ class WalletServiceImplTest {
 
         verify(accountMapper, times(2)).update(isNull(), any());
     }
+
+    // ---------------- §3.6 wallet VO ----------------
+
+    /** §3.6: available = balance - frozen, computed server-side so the client never subtracts. */
+    @Test
+    void accountVOComputesAvailableBalance() {
+        when(accountMapper.selectOne(any())).thenReturn(account(USER_ID, "350.00", "100.00", 0));
+
+        var vo = service.getAccountVO(USER_ID);
+
+        assertThat(vo.getUserId()).isEqualTo(USER_ID);
+        assertThat(vo.getBalance()).isEqualByComparingTo("350.00");
+        assertThat(vo.getFrozen()).isEqualByComparingTo("100.00");
+        assertThat(vo.getAvailableBalance()).isEqualByComparingTo("250.00");
+    }
+
+    /** A fresh account reports zeroes rather than nulls. */
+    @Test
+    void accountVODefaultsMissingColumnsToZero() {
+        when(accountMapper.selectOne(any())).thenReturn(account(USER_ID, "0.00", "0.00", 0));
+
+        var vo = service.getAccountVO(USER_ID);
+
+        assertThat(vo.getAvailableBalance()).isEqualByComparingTo("0.00");
+        assertThat(vo.getTotalIncome()).isEqualByComparingTo("0.00");
+        assertThat(vo.getTotalExpense()).isEqualByComparingTo("0.00");
+        assertThat(vo.getWithdrawing()).isEqualByComparingTo("0.00");
+    }
+
+    /** Null balance/frozen on a legacy row must not NPE while computing available. */
+    @Test
+    void accountVOToleratesNullBalance() {
+        WalletAccount legacy = account(USER_ID, "0.00", "0.00", 0);
+        legacy.setBalance(null);
+        legacy.setFrozen(null);
+        when(accountMapper.selectOne(any())).thenReturn(legacy);
+
+        var vo = service.getAccountVO(USER_ID);
+
+        assertThat(vo.getBalance()).isEqualByComparingTo("0.00");
+        assertThat(vo.getAvailableBalance()).isEqualByComparingTo("0.00");
+    }
+
+    // ---------------- §3.7 transaction VO ----------------
+
+    /** §3.7: each row carries the Chinese type name and direction for direct rendering. */
+    @Test
+    void transactionVOAddsTypeNameAndDirection() {
+        com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction txn =
+                new com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction();
+        txn.setTxnNo("TX20260921100000123456");
+        txn.setType("PAY");
+        txn.setAmount(new BigDecimal("200.00"));
+        txn.setBalanceAfter(new BigDecimal("300.00"));
+        txn.setFrozenAfter(new BigDecimal("0.00"));
+        txn.setOrderNo(ORDER_NO);
+        txn.setRemark("订单结算扣款");
+        when(accountMapper.selectOne(any())).thenReturn(account(USER_ID, "500.00", "200.00", 0));
+        when(transactionMapper.selectPage(any(), any())).thenReturn(pageOf(txn));
+
+        var result = service.pageTransactionVOs(USER_ID,
+                new com.dsc.medipartner.module.wallet.domain.dto.TransactionQuery());
+
+        assertThat(result.getRecords()).hasSize(1);
+        var vo = result.getRecords().get(0);
+        assertThat(vo.getType()).isEqualTo("PAY");
+        assertThat(vo.getTypeName()).isEqualTo("支付");
+        assertThat(vo.getDirection()).isEqualTo("OUT");
+        assertThat(vo.getTxnNo()).isEqualTo("TX20260921100000123456");
+        assertThat(vo.getOrderNo()).isEqualTo(ORDER_NO);
+    }
+
+    private com.baomidou.mybatisplus.core.metadata.IPage<
+            com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction> pageOf(
+            com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction txn) {
+        com.baomidou.mybatisplus.extension.plugins.pagination.Page<
+                com.dsc.medipartner.module.wallet.domain.entity.WalletTransaction> page =
+                new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(1, 10, 1);
+        page.setRecords(java.util.List.of(txn));
+        return page;
+    }
 }

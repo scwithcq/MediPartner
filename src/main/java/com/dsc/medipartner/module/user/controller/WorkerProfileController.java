@@ -4,6 +4,7 @@ import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.user.domain.dto.UpdateWorkerProfileRequest;
 import com.dsc.medipartner.module.user.domain.vo.CreditVO;
+import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
 import com.dsc.medipartner.module.user.service.CreditService;
 import com.dsc.medipartner.module.user.service.WorkerService;
@@ -28,6 +29,12 @@ public class WorkerProfileController {
     public WorkerProfileController(WorkerService workerService, CreditService creditService) {
         this.workerService = workerService;
         this.creditService = creditService;
+    }
+
+    /** §7.1 工作台首页聚合：一次请求返回首页全部数据，避免弱网下首屏发四五个请求 */
+    @GetMapping("/overview")
+    public R<WorkerOverviewVO> overview() {
+        return R.ok(workerService.getOverview(UserContext.userId()));
     }
 
     /** §7.2 我的陪诊师资料 */

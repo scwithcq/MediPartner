@@ -5,9 +5,11 @@ import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
+import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
+import com.dsc.medipartner.module.order.domain.vo.PricePreviewVO;
 
 public interface OrderService {
 
@@ -32,6 +34,27 @@ public interface OrderService {
 
     /** §5.3 内部：分页查询（保留实体分页供其它模块复用） */
     IPage<ServiceOrder> pageUserOrders(Long userId, OrderQuery query);
+
+    /** §5.1 服务费试算（唯一计价入口 PriceService，前端不得自行计算） */
+    PricePreviewVO pricePreview(String serviceType, String city, java.math.BigDecimal hours);
+
+    /** §5.6 联系陪诊师（脱敏 + 稳定虚拟号；仅本人订单） */
+    ContactVO userContact(Long userId, String orderNo);
+
+    /** §7.10 联系求助者（脱敏 + 稳定虚拟号；仅本人接的单） */
+    ContactVO workerContact(Long workerId, String orderNo);
+
+    /** §3.3 各状态订单数（「我的」页聚合用） */
+    java.util.Map<String, Long> countByStatusForUser(Long userId);
+
+    /** §7.1 今日待服务订单数（serviceTime 落在今天且状态 20） */
+    long countTodayPending(Long workerId);
+
+    /** §7.1 本月完成单数（状态 50 且 confirmedAt 在本月） */
+    long countMonthCompleted(Long workerId);
+
+    /** §7.1 大厅当前可抢单数（首页红点） */
+    long countHall();
 
     /** §7.5 内部：接单大厅实体分页 */
     IPage<ServiceOrder> pageHall(OrderQuery query);

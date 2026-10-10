@@ -19,6 +19,7 @@ import com.dsc.medipartner.module.order.service.OrderAssembler;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
+import com.dsc.medipartner.module.order.service.VirtualPhoneService;
 import com.dsc.medipartner.module.review.service.ReviewService;
 import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
 import com.dsc.medipartner.module.user.service.CreditService;
@@ -97,7 +98,7 @@ class OrderServiceImplTest {
         orderAssembler = new OrderAssembler();
         service = new OrderServiceImpl(orderMapper, walletService, workerService, stateMachineService,
                 traceService, reportTaskPublisher, demandService, creditService, priceService,
-                userService, reviewService, actionResolver, orderAssembler);
+                userService, reviewService, actionResolver, orderAssembler, new VirtualPhoneService());
     }
 
     @AfterEach

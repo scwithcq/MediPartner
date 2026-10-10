@@ -12,8 +12,10 @@ import com.dsc.medipartner.module.ai.service.ReportService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
+import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
+import com.dsc.medipartner.module.order.domain.vo.PricePreviewVO;
 import com.dsc.medipartner.module.order.domain.vo.TraceVO;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.TraceService;
@@ -26,6 +28,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.util.Map;
 
 @RestController
@@ -69,6 +72,20 @@ public class OrderController {
     public R<Void> confirm(@PathVariable String orderNo) {
         orderService.confirm(UserContext.userId(), orderNo);
         return R.ok();
+    }
+
+    /** §5.1 服务费试算：唯一计价入口 PriceService，前端不得自行计算金额 */
+    @GetMapping("/price-preview")
+    public R<PricePreviewVO> pricePreview(@RequestParam String serviceType,
+                                          @RequestParam(required = false) String city,
+                                          @RequestParam(required = false) BigDecimal hours) {
+        return R.ok(orderService.pricePreview(serviceType, city, hours));
+    }
+
+    /** §5.6 联系陪诊师：脱敏 + 稳定虚拟号 */
+    @GetMapping("/{orderNo}/contact")
+    public R<ContactVO> contact(@PathVariable String orderNo) {
+        return R.ok(orderService.userContact(UserContext.userId(), orderNo));
     }
 
     /** §5.9 查看本单服务留痕（TRACE + VOUCHER），createdAt 倒序；归属校验后放行 */

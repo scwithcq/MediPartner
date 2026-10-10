@@ -9,6 +9,7 @@ import com.dsc.medipartner.common.result.ErrorCode;
 import com.dsc.medipartner.common.result.PageQuery;
 import com.dsc.medipartner.common.result.SortWhitelist;
 import com.dsc.medipartner.common.security.UserContext;
+import com.dsc.medipartner.common.util.DesensitizeUtil;
 import com.dsc.medipartner.common.util.OrderNoGenerator;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
@@ -20,8 +21,10 @@ import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderEvent;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
+import com.dsc.medipartner.module.order.domain.vo.ContactVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
+import com.dsc.medipartner.module.order.domain.vo.PricePreviewVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.ActionResolver;
 import com.dsc.medipartner.module.order.service.OrderAssembler;
@@ -29,6 +32,7 @@ import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
+import com.dsc.medipartner.module.order.service.VirtualPhoneService;
 import com.dsc.medipartner.module.review.service.ReviewService;
 import com.dsc.medipartner.module.user.domain.entity.SysUser;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
@@ -45,12 +49,16 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 @Slf4j
@@ -70,6 +78,7 @@ public class OrderServiceImpl implements OrderService {
     private final ReviewService reviewService;
     private final ActionResolver actionResolver;
     private final OrderAssembler orderAssembler;
+    private final VirtualPhoneService virtualPhoneService;
 
     /** 服务时间需晚于当前时间 30 分钟（契约 §5.2） */
     private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
@@ -94,7 +103,7 @@ public class OrderServiceImpl implements OrderService {
                             DemandService demandService, CreditService creditService,
                             PriceService priceService, UserService userService,
                             ReviewService reviewService, ActionResolver actionResolver,
-                            OrderAssembler orderAssembler) {
+                            OrderAssembler orderAssembler, VirtualPhoneService virtualPhoneService) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
@@ -108,6 +117,7 @@ public class OrderServiceImpl implements OrderService {
         this.reviewService = reviewService;
         this.actionResolver = actionResolver;
         this.orderAssembler = orderAssembler;
+        this.virtualPhoneService = virtualPhoneService;
     }
 
     @Override
@@ -247,6 +257,161 @@ public class OrderServiceImpl implements OrderService {
             orderNos.add(order.getOrderNo());
         }
         return orderNos;
+    }
+
+    // ---------------- §5.1 服务费试算 ----------------
+
+    /** 报价有效期（§5.1 默认 30 分钟） */
+    private static final long PRICE_QUOTE_VALID_MINUTES = 30;
+
+    @Override
+    public PricePreviewVO pricePreview(String serviceType, String city, BigDecimal hours) {
+        PriceResult price = priceService.calc(serviceType, city, hours);
+        PricePreviewVO vo = new PricePreviewVO();
+        vo.setServiceType(price.getServiceType());
+        vo.setServiceTypeName(price.getServiceTypeName());
+        vo.setCity(price.getCity());
+        vo.setHours(price.getHours());
+        vo.setBasePrice(price.getBasePrice());
+        vo.setExtraHours(price.getExtraHours());
+        vo.setExtraHourPrice(price.getExtraHourPrice());
+        vo.setAmount(price.getAmount());
+        vo.setPriceRuleId(price.getPriceRuleId());
+        vo.setPriceVersion(price.getPriceVersion());
+        vo.setValidUntil(LocalDateTime.now().plusMinutes(PRICE_QUOTE_VALID_MINUTES));
+        vo.setRemark(price.getRemark());
+        return vo;
+    }
+
+    // ---------------- §5.6 / §7.10 联系对方 ----------------
+
+    @Override
+    public ContactVO userContact(Long userId, String orderNo) {
+        ServiceOrder order = requireOrder(orderNo);
+        if (!userId.equals(order.getUserId())) {
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        if (order.getWorkerId() == null) {
+            // 尚未接单，无对方可联系（§5.6 错误码 3002）
+            throw new BizException(ErrorCode.ORDER_STATE_ILLEGAL, "订单尚未被接单，暂无陪诊师联系方式");
+        }
+        SysUser peer = loadUser(order.getWorkerId());
+        return buildContact(order, "WORKER", peer, peer == null ? null : peer.getNickname(),
+                peer == null ? null : peer.getPhone());
+    }
+
+    @Override
+    public ContactVO workerContact(Long workerId, String orderNo) {
+        ServiceOrder order = requireOrder(orderNo);
+        if (!workerId.equals(order.getWorkerId())) {
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        SysUser peer = loadUser(order.getUserId());
+        return buildContact(order, "USER", peer, peer == null ? null : peer.getNickname(),
+                peer == null ? null : peer.getPhone());
+    }
+
+    /**
+     * 组装联系信息（§5.6）。
+     * 虚拟号由 {@code orderNo} 稳定生成，双方查到的是同一个号；真实手机号一律脱敏。
+     */
+    private ContactVO buildContact(ServiceOrder order, String peerRole, SysUser peer,
+                                   String peerNickname, String peerPhone) {
+        ContactVO vo = new ContactVO();
+        vo.setPeerRole(peerRole);
+        vo.setPeerName(DesensitizeUtil.nickname(peerNickname));
+        vo.setMaskedPhone(DesensitizeUtil.phone(peerPhone));
+        vo.setVirtualPhone(virtualPhoneService.generate(order.getOrderNo()));
+        // 虚拟号在订单完成后 24 小时失效（§5.6）
+        vo.setVirtualExpireAt(resolveVirtualExpireAt(order));
+        // 仅 20~50 可联系；10 待接单与 60/70 终态不可联系（§5.6 错误码 3002）
+        vo.setCanCall(isContactable(order.getOrderStatus()));
+        vo.setTip("为保护隐私，请通过虚拟号联系");
+        return vo;
+    }
+
+    private LocalDateTime resolveVirtualExpireAt(ServiceOrder order) {
+        LocalDateTime base = order.getConfirmedAt() != null ? order.getConfirmedAt()
+                : (order.getFinishedAt() != null ? order.getFinishedAt() : null);
+        return base == null ? null : base.plusHours(24);
+    }
+
+    private boolean isContactable(Integer orderStatus) {
+        OrderState state = OrderState.ofNullable(orderStatus);
+        if (state == null) {
+            return false;
+        }
+        return switch (state) {
+            case ACCEPTED, IN_SERVICE, PENDING_CONFIRM, COMPLETED -> true;
+            default -> false;
+        };
+    }
+
+    // ---------------- §3.3 / §7.1 聚合统计 ----------------
+
+    @Override
+    public Map<String, Long> countByStatusForUser(Long userId) {
+        List<ServiceOrder> rows = orderMapper.selectList(new LambdaQueryWrapper<ServiceOrder>()
+                .select(ServiceOrder::getOrderStatus)
+                .eq(ServiceOrder::getUserId, userId));
+        Map<String, Long> counts = new LinkedHashMap<>();
+        // 契约 §3.3 要求各状态键恒存在，无数据时为 0，前端不必判空
+        counts.put("waitingAccept", 0L);
+        counts.put("accepted", 0L);
+        counts.put("inService", 0L);
+        counts.put("pendingConfirm", 0L);
+        counts.put("completed", 0L);
+        counts.put("cancelled", 0L);
+        counts.put("abnormal", 0L);
+        for (ServiceOrder row : rows) {
+            String key = statusKey(row.getOrderStatus());
+            if (key != null) {
+                counts.merge(key, 1L, Long::sum);
+            }
+        }
+        return counts;
+    }
+
+    private String statusKey(Integer orderStatus) {
+        OrderState state = OrderState.ofNullable(orderStatus);
+        if (state == null) {
+            return null;
+        }
+        return switch (state) {
+            case WAITING_ACCEPT -> "waitingAccept";
+            case ACCEPTED -> "accepted";
+            case IN_SERVICE -> "inService";
+            case PENDING_CONFIRM -> "pendingConfirm";
+            case COMPLETED -> "completed";
+            case CANCELLED -> "cancelled";
+            case ABNORMAL -> "abnormal";
+        };
+    }
+
+    @Override
+    public long countTodayPending(Long workerId) {
+        LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
+        LocalDateTime endOfDay = startOfDay.plusDays(1);
+        return orderMapper.selectCount(new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getWorkerId, workerId)
+                .eq(ServiceOrder::getOrderStatus, OrderState.ACCEPTED.getCode())
+                .ge(ServiceOrder::getServiceTime, startOfDay)
+                .lt(ServiceOrder::getServiceTime, endOfDay));
+    }
+
+    @Override
+    public long countMonthCompleted(Long workerId) {
+        LocalDateTime startOfMonth = LocalDate.now().withDayOfMonth(1).atStartOfDay();
+        return orderMapper.selectCount(new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getWorkerId, workerId)
+                .eq(ServiceOrder::getOrderStatus, OrderState.COMPLETED.getCode())
+                .ge(ServiceOrder::getConfirmedAt, startOfMonth));
+    }
+
+    @Override
+    public long countHall() {
+        return orderMapper.selectCount(new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode()));
     }
 
     /** 陪诊师资料（跨模块只调 Service，见手册 §3.2 铁律）；workerId 为空时返回 null */

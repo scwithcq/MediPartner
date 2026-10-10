@@ -3,7 +3,7 @@ package com.dsc.medipartner.module.user.controller;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.user.domain.dto.UpdateProfileRequest;
-import com.dsc.medipartner.module.user.domain.entity.SysUser;
+import com.dsc.medipartner.module.user.domain.vo.UserVO;
 import com.dsc.medipartner.module.user.service.UserService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -21,9 +21,10 @@ public class UserController {
         this.userService = userService;
     }
 
+    /** §3.1 我的资料：返回 UserVO，手机号脱敏（附录 H-5 整改，不再裸出 SysUser 实体） */
     @GetMapping("/profile")
-    public R<SysUser> profile() {
-        return R.ok(userService.getById(UserContext.userId()));
+    public R<UserVO> profile() {
+        return R.ok(userService.getProfile(UserContext.userId()));
     }
 
     @PutMapping("/profile")

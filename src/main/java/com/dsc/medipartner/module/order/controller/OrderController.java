@@ -12,6 +12,8 @@ import com.dsc.medipartner.module.ai.service.ReportService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
+import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
 import com.dsc.medipartner.module.order.domain.vo.TraceVO;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.TraceService;
@@ -47,13 +49,13 @@ public class OrderController {
     }
 
     @GetMapping("/{orderNo}")
-    public R<ServiceOrder> detail(@PathVariable String orderNo) {
-        return R.ok(orderService.getByOrderNo(orderNo));
+    public R<OrderDetailVO> detail(@PathVariable String orderNo) {
+        return R.ok(orderService.getUserOrderDetail(UserContext.userId(), orderNo));
     }
 
     @GetMapping("/list")
-    public R<PageResult<ServiceOrder>> list(OrderQuery query) {
-        IPage<ServiceOrder> page = orderService.pageUserOrders(UserContext.userId(), query);
+    public R<PageResult<OrderCardVO>> list(OrderQuery query) {
+        IPage<OrderCardVO> page = orderService.pageUserOrderCards(UserContext.userId(), query);
         return R.ok(PageResult.of(page));
     }
 

@@ -1,6 +1,7 @@
 package com.dsc.medipartner.module.user.service;
 
 import com.dsc.medipartner.module.user.domain.entity.SysUser;
+import com.dsc.medipartner.module.user.domain.vo.UserVO;
 
 import java.util.Collection;
 import java.util.List;
@@ -17,4 +18,10 @@ public interface UserService {
 
     /** 批量查用户（评价列表回填昵称头像用）；入参为空返回空列表，查不到的 ID 直接缺席 */
     List<SysUser> listByIds(Collection<Long> userIds);
+
+    /**
+     * 我的资料（契约 §3.1、附录 H-5）：返回 {@link UserVO} 而非裸实体，
+     * {@code phone} 走 {@code DesensitizeUtil} 脱敏；用户不存在抛 2001。
+     */
+    UserVO getProfile(Long userId);
 }

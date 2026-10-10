@@ -8,10 +8,14 @@ import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
+import com.dsc.medipartner.module.order.service.ActionResolver;
+import com.dsc.medipartner.module.order.service.OrderAssembler;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
+import com.dsc.medipartner.module.review.service.ReviewService;
 import com.dsc.medipartner.module.user.service.CreditService;
+import com.dsc.medipartner.module.user.service.UserService;
 import com.dsc.medipartner.module.user.service.WorkerService;
 import com.dsc.medipartner.module.wallet.service.WalletService;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -55,7 +59,11 @@ class OrderPagingTest {
                 mock(ReportTaskPublisher.class),
                 mock(DemandService.class),
                 mock(CreditService.class),
-                mock(PriceService.class));
+                mock(PriceService.class),
+                mock(UserService.class),
+                mock(ReviewService.class),
+                new ActionResolver(),
+                new OrderAssembler());
 
         if (hall) {
             service.pageHall(query);

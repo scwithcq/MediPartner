@@ -43,4 +43,16 @@ public interface ReviewService {
 
     /** §7.21 回复评价：未回复且 7 天内，一评价一回复 */
     WorkerReviewVO reply(Long workerId, Long reviewId, ReplyReviewRequest request);
+
+    /**
+     * 批量查询这些订单中「指定角色已存在生效评价」的订单号。
+     *
+     * <p>供 {@code order} 模块计算 {@code actions[]} 用（§5.3 的 REVIEW 与 APPEND_REVIEW 互斥、
+     * §7.7 的 REPLY_REVIEW）：跨模块只经本接口调用，order 模块不注入 review 的 Mapper。
+     *
+     * @param orderNos 订单号集合；为空返回空集合
+     * @param reviewerRole USER / WORKER
+     * @return 已存在该角色评价的订单号集合
+     */
+    java.util.Set<String> findReviewedOrderNos(java.util.Collection<String> orderNos, String reviewerRole);
 }

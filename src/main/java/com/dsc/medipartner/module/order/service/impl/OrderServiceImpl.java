@@ -20,14 +20,21 @@ import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderEvent;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
+import com.dsc.medipartner.module.order.service.ActionResolver;
+import com.dsc.medipartner.module.order.service.OrderAssembler;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
+import com.dsc.medipartner.module.review.service.ReviewService;
+import com.dsc.medipartner.module.user.domain.entity.SysUser;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
 import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
 import com.dsc.medipartner.module.user.service.CreditService;
+import com.dsc.medipartner.module.user.service.UserService;
 import com.dsc.medipartner.module.user.service.WorkerService;
 import com.dsc.medipartner.module.wallet.service.WalletService;
 import lombok.extern.slf4j.Slf4j;
@@ -41,8 +48,10 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -57,6 +66,10 @@ public class OrderServiceImpl implements OrderService {
     private final DemandService demandService;
     private final CreditService creditService;
     private final PriceService priceService;
+    private final UserService userService;
+    private final ReviewService reviewService;
+    private final ActionResolver actionResolver;
+    private final OrderAssembler orderAssembler;
 
     /** 服务时间需晚于当前时间 30 分钟（契约 §5.2） */
     private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
@@ -79,7 +92,9 @@ public class OrderServiceImpl implements OrderService {
                             WorkerService workerService, OrderStateMachineService stateMachineService,
                             TraceService traceService, ReportTaskPublisher reportTaskPublisher,
                             DemandService demandService, CreditService creditService,
-                            PriceService priceService) {
+                            PriceService priceService, UserService userService,
+                            ReviewService reviewService, ActionResolver actionResolver,
+                            OrderAssembler orderAssembler) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
@@ -89,6 +104,10 @@ public class OrderServiceImpl implements OrderService {
         this.demandService = demandService;
         this.creditService = creditService;
         this.priceService = priceService;
+        this.userService = userService;
+        this.reviewService = reviewService;
+        this.actionResolver = actionResolver;
+        this.orderAssembler = orderAssembler;
     }
 
     @Override
@@ -159,6 +178,102 @@ public class OrderServiceImpl implements OrderService {
     public ServiceOrder getByOrderNo(String orderNo) {
         return orderMapper.selectOne(new LambdaQueryWrapper<ServiceOrder>()
                 .eq(ServiceOrder::getOrderNo, orderNo));
+    }
+
+    @Override
+    public IPage<OrderCardVO> pageUserOrderCards(Long userId, OrderQuery query) {
+        IPage<ServiceOrder> page = pageUserOrders(userId, query);
+        List<ServiceOrder> records = page.getRecords();
+        // 批量取评价状态，避免逐单查询造成 N+1
+        Set<String> reviewed = reviewService.findReviewedOrderNos(orderNosOf(records), "USER");
+        List<OrderCardVO> cards = new ArrayList<>(records.size());
+        for (ServiceOrder order : records) {
+            cards.add(orderAssembler.toCard(order,
+                    loadWorkerProfile(order.getWorkerId()), loadUser(order.getWorkerId()),
+                    actionResolver.resolveForUser(order.getOrderStatus(), reviewed.contains(order.getOrderNo()))));
+        }
+        return mapPage(page, cards);
+    }
+
+    @Override
+    public IPage<OrderCardVO> pageHallCards(Long workerId, OrderQuery query) {
+        IPage<ServiceOrder> page = pageHall(query);
+        // §7.5：大厅是「谁都能看到、谁先抢谁得」，不下发 actions[]，可抢与否由 §7.1 的 accepting 判断
+        List<OrderCardVO> cards = new ArrayList<>(page.getRecords().size());
+        for (ServiceOrder order : page.getRecords()) {
+            cards.add(orderAssembler.toCard(order, null, null, List.of()));
+        }
+        return mapPage(page, cards);
+    }
+
+    @Override
+    public IPage<OrderCardVO> pageWorkerOrderCards(Long workerId, OrderQuery query) {
+        IPage<ServiceOrder> page = pageWorkerOrders(workerId, query);
+        List<ServiceOrder> records = page.getRecords();
+        Set<String> replied = reviewService.findReviewedOrderNos(orderNosOf(records), "WORKER");
+        List<OrderCardVO> cards = new ArrayList<>(records.size());
+        for (ServiceOrder order : records) {
+            cards.add(orderAssembler.toCard(order, null, loadUser(order.getUserId()),
+                    actionResolver.resolveForWorker(order.getOrderStatus(),
+                            replied.contains(order.getOrderNo()))));
+        }
+        return mapPage(page, cards);
+    }
+
+    @Override
+    public OrderDetailVO getUserOrderDetail(Long userId, String orderNo) {
+        ServiceOrder order = requireOrder(orderNo);
+        if (!userId.equals(order.getUserId())) {
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        return orderAssembler.toDetail(order,
+                loadWorkerProfile(order.getWorkerId()), loadUser(order.getWorkerId()),
+                actionResolver.resolveForUser(order.getOrderStatus(), hasReview(orderNo, "USER")));
+    }
+
+    @Override
+    public OrderDetailVO getWorkerOrderDetail(Long workerId, String orderNo) {
+        ServiceOrder order = requireOrder(orderNo);
+        if (!workerId.equals(order.getWorkerId())) {
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        return orderAssembler.toDetail(order, null, loadUser(order.getUserId()),
+                actionResolver.resolveForWorker(order.getOrderStatus(), hasReview(orderNo, "WORKER")));
+    }
+
+    private List<String> orderNosOf(List<ServiceOrder> orders) {
+        List<String> orderNos = new ArrayList<>(orders.size());
+        for (ServiceOrder order : orders) {
+            orderNos.add(order.getOrderNo());
+        }
+        return orderNos;
+    }
+
+    /** 陪诊师资料（跨模块只调 Service，见手册 §3.2 铁律）；workerId 为空时返回 null */
+    private WorkerProfile loadWorkerProfile(Long workerId) {
+        return workerId == null ? null : workerService.getByUserId(workerId);
+    }
+
+    /** 用户资料；userId 为空时返回 null */
+    private SysUser loadUser(Long userId) {
+        return userId == null ? null : userService.getById(userId);
+    }
+
+    /** 单订单评价状态（详情页用），查询失败退化为「未评价」而不是让详情整体报错 */
+    private boolean hasReview(String orderNo, String role) {
+        try {
+            return !reviewService.findReviewedOrderNos(List.of(orderNo), role).isEmpty();
+        } catch (Exception e) {
+            log.warn("[order] 查询订单评价状态失败，按未评价处理 orderNo={}: {}", orderNo, e.getMessage());
+            return false;
+        }
+    }
+
+    /** 在保留分页元信息的前提下替换记录集 */
+    private <T> IPage<T> mapPage(IPage<?> source, List<T> records) {
+        Page<T> page = new Page<>(source.getCurrent(), source.getSize(), source.getTotal());
+        page.setRecords(records);
+        return page;
     }
 
     @Override

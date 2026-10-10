@@ -10,6 +10,8 @@ import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.UploadTraceRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
+import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
 import com.dsc.medipartner.module.order.domain.vo.TraceVO;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.TraceService;
@@ -35,8 +37,8 @@ public class WorkerOrderController {
     }
 
     @GetMapping("/hall")
-    public R<PageResult<ServiceOrder>> hall(OrderQuery query) {
-        IPage<ServiceOrder> page = orderService.pageHall(query);
+    public R<PageResult<OrderCardVO>> hall(OrderQuery query) {
+        IPage<OrderCardVO> page = orderService.pageHallCards(UserContext.userId(), query);
         return R.ok(PageResult.of(page));
     }
 
@@ -47,9 +49,15 @@ public class WorkerOrderController {
     }
 
     @GetMapping("/list")
-    public R<PageResult<ServiceOrder>> list(OrderQuery query) {
-        IPage<ServiceOrder> page = orderService.pageWorkerOrders(UserContext.userId(), query);
+    public R<PageResult<OrderCardVO>> list(OrderQuery query) {
+        IPage<OrderCardVO> page = orderService.pageWorkerOrderCards(UserContext.userId(), query);
         return R.ok(PageResult.of(page));
+    }
+
+    /** §7.8 接单详情：此前完全缺失（附录 H-4 / §7.8 备注 1），本批补齐 */
+    @GetMapping("/{orderNo}")
+    public R<OrderDetailVO> detail(@PathVariable String orderNo) {
+        return R.ok(orderService.getWorkerOrderDetail(UserContext.userId(), orderNo));
     }
 
     @PostMapping("/{orderNo}/start")

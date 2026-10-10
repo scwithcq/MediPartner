@@ -14,11 +14,15 @@ import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
+import com.dsc.medipartner.module.order.service.ActionResolver;
+import com.dsc.medipartner.module.order.service.OrderAssembler;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
 import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
+import com.dsc.medipartner.module.review.service.ReviewService;
 import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
 import com.dsc.medipartner.module.user.service.CreditService;
+import com.dsc.medipartner.module.user.service.UserService;
 import com.dsc.medipartner.module.user.service.WorkerService;
 import com.dsc.medipartner.module.wallet.service.WalletService;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -65,6 +69,10 @@ class OrderServiceImplTest {
     private DemandService demandService;
     private CreditService creditService;
     private PriceService priceService;
+    private UserService userService;
+    private ReviewService reviewService;
+    private ActionResolver actionResolver;
+    private OrderAssembler orderAssembler;
     private OrderServiceImpl service;
 
     @BeforeAll
@@ -83,8 +91,13 @@ class OrderServiceImplTest {
         demandService = mock(DemandService.class);
         creditService = mock(CreditService.class);
         priceService = mock(PriceService.class);
+        userService = mock(UserService.class);
+        reviewService = mock(ReviewService.class);
+        actionResolver = new ActionResolver();
+        orderAssembler = new OrderAssembler();
         service = new OrderServiceImpl(orderMapper, walletService, workerService, stateMachineService,
-                traceService, reportTaskPublisher, demandService, creditService, priceService);
+                traceService, reportTaskPublisher, demandService, creditService, priceService,
+                userService, reviewService, actionResolver, orderAssembler);
     }
 
     @AfterEach

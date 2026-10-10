@@ -43,10 +43,13 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -68,6 +71,8 @@ public class ReviewServiceImpl implements ReviewService {
     private static final String DEFAULT_AVATAR = "/files/AVATAR/default.png";
     private static final int GOOD_STAR_MIN = 4;
     private static final int BAD_STAR_MAX = 2;
+    /** review_status = 1 生效中；0 为被管理端仲裁屏蔽（§9.23） */
+    private static final int REVIEW_STATUS_ACTIVE = 1;
 
     private final ReviewMapper reviewMapper;
     private final OrderService orderService;
@@ -484,5 +489,26 @@ public class ReviewServiceImpl implements ReviewService {
         Page<T> page = new Page<>(source.getCurrent(), source.getSize(), source.getTotal());
         page.setRecords(records);
         return page;
+    }
+
+    /**
+     * 批量查「指定角色已评价」的订单号，供 order 模块算 actions[]。
+     * 一次 IN 查询，避免订单列表逐条查评价造成 N+1。
+     */
+    @Override
+    public Set<String> findReviewedOrderNos(Collection<String> orderNos, String reviewerRole) {
+        if (orderNos == null || orderNos.isEmpty() || !StringUtils.hasText(reviewerRole)) {
+            return Set.of();
+        }
+        List<Review> rows = reviewMapper.selectList(new LambdaQueryWrapper<Review>()
+                .select(Review::getOrderNo)
+                .in(Review::getOrderNo, orderNos)
+                .eq(Review::getReviewerRole, reviewerRole.trim().toUpperCase(Locale.ROOT))
+                .eq(Review::getReviewStatus, REVIEW_STATUS_ACTIVE));
+        Set<String> result = new HashSet<>(rows.size());
+        for (Review row : rows) {
+            result.add(row.getOrderNo());
+        }
+        return result;
     }
 }

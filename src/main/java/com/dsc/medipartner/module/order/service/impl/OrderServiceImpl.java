@@ -12,6 +12,7 @@ import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.PriceResult;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderEvent;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
@@ -19,6 +20,7 @@ import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
+import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
 import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
@@ -45,6 +47,12 @@ public class OrderServiceImpl implements OrderService {
     private final ReportTaskPublisher reportTaskPublisher;
     private final DemandService demandService;
     private final CreditService creditService;
+    private final PriceService priceService;
+
+    /** 服务时间需晚于当前时间 30 分钟（契约 §5.2） */
+    private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
+    /** 服务时间需早于当前时间 30 天（契约 §5.2） */
+    private static final long MAX_SERVICE_TIME_AHEAD_DAYS = 30;
 
     @Value("${medi.order.max-active-orders:3}")
     private int maxActiveOrders;
@@ -58,7 +66,8 @@ public class OrderServiceImpl implements OrderService {
     public OrderServiceImpl(ServiceOrderMapper orderMapper, WalletService walletService,
                             WorkerService workerService, OrderStateMachineService stateMachineService,
                             TraceService traceService, ReportTaskPublisher reportTaskPublisher,
-                            DemandService demandService, CreditService creditService) {
+                            DemandService demandService, CreditService creditService,
+                            PriceService priceService) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
@@ -67,26 +76,40 @@ public class OrderServiceImpl implements OrderService {
         this.reportTaskPublisher = reportTaskPublisher;
         this.demandService = demandService;
         this.creditService = creditService;
+        this.priceService = priceService;
     }
 
     @Override
     @Transactional
     public String create(CreateOrderRequest request) {
         Long userId = UserContext.userId();
+
+        // 契约 §5.2 改造点 2：服务时间合法性（需晚于当前时间 30 分钟、早于 30 天）
+        checkServiceTime(request.getServiceTime());
+
+        // 契约 §5.2 改造点 1 / 附录 H-1：金额一律由服务端计算，前端传入值不参与任何计算
+        PriceResult price = priceService.calc(request.getServiceType(), request.getCity(), request.getHours());
+        checkPriceConsistency(request, price);
+
         String orderNo = OrderNoGenerator.next("MP");
-        walletService.freeze(userId, orderNo, request.getAmount());
+        walletService.freeze(userId, orderNo, price.getAmount());
 
         ServiceOrder order = new ServiceOrder();
         order.setOrderNo(orderNo);
         order.setUserId(userId);
-        order.setAmount(request.getAmount());
+        order.setAmount(price.getAmount());
+        order.setPriceVersion(price.getPriceVersion());
+        order.setPriceRuleId(price.getPriceRuleId());
         order.setOrderStatus(OrderState.WAITING_ACCEPT.getCode());
         order.setGeoHash(request.getGeoHash());
-        order.setServiceType(StringUtils.hasText(request.getServiceType()) ? request.getServiceType() : "ACCOMPANY");
+        order.setServiceType(price.getServiceType());
+        order.setServiceHours(price.getHours());
         order.setSymptomDesc(request.getSymptomDesc());
         order.setCity(request.getCity());
+        order.setContactPhone(trimToNull(request.getContactPhone()));
         order.setHospitalPref(request.getHospitalPref());
         order.setServiceTime(request.getServiceTime());
+        order.setRemark(trimToNull(request.getRemark()));
         order.setDemandId(request.getDemandId());
         order.setVersion(0);
         orderMapper.insert(order);
@@ -94,6 +117,30 @@ public class OrderServiceImpl implements OrderService {
             demandService.markOrdered(request.getDemandId(), orderNo);
         }
         return orderNo;
+    }
+
+    /** 服务时间需晚于当前时间 30 分钟、早于 30 天（契约 §5.2，错误码 3007） */
+    private void checkServiceTime(LocalDateTime serviceTime) {
+        LocalDateTime now = LocalDateTime.now();
+        if (serviceTime.isBefore(now.plusMinutes(MIN_SERVICE_TIME_OFFSET_MINUTES))
+                || serviceTime.isAfter(now.plusDays(MAX_SERVICE_TIME_AHEAD_DAYS))) {
+            throw new BizException(ErrorCode.SERVICE_TIME_ILLEGAL);
+        }
+    }
+
+    /**
+     * 价格一致性校验（契约 §5.2、§9.31 的 3010）：
+     * 前端带的价格版本或展示金额与服务端重算结果不一致时，要求用户重新确认，避免按过期价格成交。
+     */
+    private void checkPriceConsistency(CreateOrderRequest request, PriceResult price) {
+        if (StringUtils.hasText(request.getPriceVersion())
+                && !request.getPriceVersion().equals(price.getPriceVersion())) {
+            throw new BizException(ErrorCode.PRICE_CHANGED);
+        }
+        if (request.getExpectAmount() != null
+                && request.getExpectAmount().compareTo(price.getAmount()) != 0) {
+            throw new BizException(ErrorCode.PRICE_CHANGED);
+        }
     }
 
     @Override

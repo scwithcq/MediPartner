@@ -13,6 +13,7 @@ public enum ErrorCode {
     FORBIDDEN(1003, "无权限访问"),
     TOKEN_EXPIRED(1004, "登录已过期，请重新登录"),
     REPEAT_REQUEST(1005, "请求过于频繁，请稍后再试"),
+    FEATURE_NOT_AVAILABLE(1006, "该功能尚未开放，敬请期待"),
     USER_NOT_FOUND(2001, "用户不存在"),
     WORKER_AUDIT_NOT_PASS(2003, "入驻审核未通过，暂不可接单"),
 
@@ -21,7 +22,10 @@ public enum ErrorCode {
     ORDER_ALREADY_ACCEPTED(3003, "手慢一步，该订单已被其他人抢走"),
     ORDER_ACCEPT_LIMIT(3004, "当前接单已达上限，请先完成现有服务"),
     CREDIT_NOT_ENOUGH(3005, "信用分不足，暂无法接单"),
+    SERVICE_TIME_ILLEGAL(3007, "服务时间不合法（需晚于当前时间且在可预约范围内）"),
     ORDER_NOT_BELONG_TO_USER(3008, "无权操作该订单"),
+    PRICE_RULE_NOT_FOUND(3009, "该服务类型暂未开放定价"),
+    PRICE_CHANGED(3010, "服务价格已更新，请重新确认"),
 
     WALLET_BALANCE_NOT_ENOUGH(4001, "账户余额不足"),
     WALLET_TXN_DUPLICATE(4002, "幂等键重复"),

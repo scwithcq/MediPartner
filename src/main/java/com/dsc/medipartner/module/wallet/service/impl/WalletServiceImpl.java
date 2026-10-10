@@ -13,12 +13,14 @@ import com.dsc.medipartner.module.wallet.domain.enums.TxnTypeEnum;
 import com.dsc.medipartner.module.wallet.mapper.WalletAccountMapper;
 import com.dsc.medipartner.module.wallet.mapper.WalletTransactionMapper;
 import com.dsc.medipartner.module.wallet.service.WalletService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 
+@Slf4j
 @Service
 public class WalletServiceImpl implements WalletService {
 
@@ -61,7 +63,7 @@ public class WalletServiceImpl implements WalletService {
                     .set(WalletAccount::getFrozen, account.getFrozen().add(amount))
                     .set(WalletAccount::getVersion, account.getVersion() + 1));
             if (updated == 1) {
-                return record(userId, orderNo, TxnTypeEnum.FREEZE, amount,
+                return record(userId, orderNo, orderNo, TxnTypeEnum.FREEZE, amount,
                         account.getBalance(), account.getBalance(),
                         account.getFrozen(), account.getFrozen().add(amount), "下单冻结资金");
             }
@@ -84,7 +86,7 @@ public class WalletServiceImpl implements WalletService {
                     .set(WalletAccount::getFrozen, account.getFrozen().subtract(amount))
                     .set(WalletAccount::getVersion, account.getVersion() + 1));
             if (updated == 1) {
-                record(userId, orderNo, TxnTypeEnum.UNFREEZE, amount,
+                record(userId, orderNo, orderNo, TxnTypeEnum.UNFREEZE, amount,
                         account.getBalance(), account.getBalance(),
                         account.getFrozen(), account.getFrozen().subtract(amount), "取消订单解冻");
                 return;
@@ -98,32 +100,60 @@ public class WalletServiceImpl implements WalletService {
     public void settle(String orderNo, Long userId, Long workerId, BigDecimal amount) {
         checkAmount(amount);
 
-        WalletAccount user = getOrCreate(userId);
-        int userUpdated = accountMapper.update(null, new LambdaUpdateWrapper<WalletAccount>()
-                .eq(WalletAccount::getUserId, userId)
-                .eq(WalletAccount::getVersion, user.getVersion())
-                .set(WalletAccount::getFrozen, user.getFrozen().subtract(amount))
-                .set(WalletAccount::getBalance, user.getBalance().subtract(amount))
-                .set(WalletAccount::getVersion, user.getVersion() + 1));
-        if (userUpdated != 1) {
-            throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT);
+        // 契约附录 H-3：重复结算守卫。已存在该订单的 PAY 流水即视为已结算，直接返回不二次扣款。
+        // 判据用 PAY（用户侧支出流水）而非任意流水，因为同一 orderNo 下 FREEZE/PAY/INCOME 合法共存。
+        if (existsTxn(orderNo, TxnTypeEnum.PAY)) {
+            log.info("[wallet] 订单已结算，跳过重复结算 orderNo={}", orderNo);
+            return;
         }
-        record(userId, orderNo, TxnTypeEnum.PAY, amount,
-                user.getBalance(), user.getBalance().subtract(amount),
-                user.getFrozen(), user.getFrozen().subtract(amount), "订单结算扣款");
 
-        WalletAccount worker = getOrCreate(workerId);
-        int workerUpdated = accountMapper.update(null, new LambdaUpdateWrapper<WalletAccount>()
-                .eq(WalletAccount::getUserId, workerId)
-                .eq(WalletAccount::getVersion, worker.getVersion())
-                .set(WalletAccount::getBalance, worker.getBalance().add(amount))
-                .set(WalletAccount::getVersion, worker.getVersion() + 1));
-        if (workerUpdated != 1) {
-            throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT);
+        // 用户侧：解冻并扣款（H-3 整改：补 MAX_RETRY 乐观锁重试，与 freeze/unfreeze/refund 对齐）
+        settleUserSide(orderNo, userId, amount);
+        // 陪诊师侧：入账
+        settleWorkerSide(orderNo, workerId, amount);
+    }
+
+    /** 用户侧解冻扣款，乐观锁冲突时按 MAX_RETRY 重试（每次重试重新读取最新 version） */
+    private void settleUserSide(String orderNo, Long userId, BigDecimal amount) {
+        for (int i = 0; i < MAX_RETRY; i++) {
+            WalletAccount user = getOrCreate(userId);
+            if (user.getFrozen().compareTo(amount) < 0) {
+                // 冻结额不足以结算，说明资金状态异常，拒绝扣款以免出现负冻结
+                throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT, "订单冻结金额不足，无法结算");
+            }
+            int userUpdated = accountMapper.update(null, new LambdaUpdateWrapper<WalletAccount>()
+                    .eq(WalletAccount::getUserId, userId)
+                    .eq(WalletAccount::getVersion, user.getVersion())
+                    .set(WalletAccount::getFrozen, user.getFrozen().subtract(amount))
+                    .set(WalletAccount::getBalance, user.getBalance().subtract(amount))
+                    .set(WalletAccount::getVersion, user.getVersion() + 1));
+            if (userUpdated == 1) {
+                record(userId, orderNo, orderNo, TxnTypeEnum.PAY, amount,
+                        user.getBalance(), user.getBalance().subtract(amount),
+                        user.getFrozen(), user.getFrozen().subtract(amount), "订单结算扣款");
+                return;
+            }
         }
-        record(workerId, orderNo, TxnTypeEnum.INCOME, amount,
-                worker.getBalance(), worker.getBalance().add(amount),
-                worker.getFrozen(), worker.getFrozen(), "订单收入");
+        throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT);
+    }
+
+    /** 陪诊师侧入账，乐观锁冲突时按 MAX_RETRY 重试 */
+    private void settleWorkerSide(String orderNo, Long workerId, BigDecimal amount) {
+        for (int i = 0; i < MAX_RETRY; i++) {
+            WalletAccount worker = getOrCreate(workerId);
+            int workerUpdated = accountMapper.update(null, new LambdaUpdateWrapper<WalletAccount>()
+                    .eq(WalletAccount::getUserId, workerId)
+                    .eq(WalletAccount::getVersion, worker.getVersion())
+                    .set(WalletAccount::getBalance, worker.getBalance().add(amount))
+                    .set(WalletAccount::getVersion, worker.getVersion() + 1));
+            if (workerUpdated == 1) {
+                record(workerId, orderNo, orderNo, TxnTypeEnum.INCOME, amount,
+                        worker.getBalance(), worker.getBalance().add(amount),
+                        worker.getFrozen(), worker.getFrozen(), "订单收入");
+                return;
+            }
+        }
+        throw new BizException(ErrorCode.WALLET_UPDATE_CONFLICT);
     }
 
     @Override
@@ -138,7 +168,7 @@ public class WalletServiceImpl implements WalletService {
                     .set(WalletAccount::getBalance, account.getBalance().add(amount))
                     .set(WalletAccount::getVersion, account.getVersion() + 1));
             if (updated == 1) {
-                record(userId, orderNo, TxnTypeEnum.REFUND, amount,
+                record(userId, orderNo, orderNo, TxnTypeEnum.REFUND, amount,
                         account.getBalance(), account.getBalance().add(amount),
                         account.getFrozen(), account.getFrozen(), "退款");
                 return;
@@ -173,11 +203,12 @@ public class WalletServiceImpl implements WalletService {
         }
     }
 
-    private String record(Long userId, String orderNo, TxnTypeEnum type, BigDecimal amount,
+    private String record(Long userId, String orderNo, String bizNo, TxnTypeEnum type, BigDecimal amount,
                           BigDecimal balanceBefore, BigDecimal balanceAfter,
                           BigDecimal frozenBefore, BigDecimal frozenAfter, String remark) {
         WalletTransaction txn = new WalletTransaction();
         txn.setTxnNo(OrderNoGenerator.next("TX"));
+        txn.setBizNo(bizNo);
         txn.setUserId(userId);
         txn.setOrderNo(orderNo);
         txn.setType(type.name());
@@ -187,7 +218,20 @@ public class WalletServiceImpl implements WalletService {
         txn.setFrozenBefore(frozenBefore);
         txn.setFrozenAfter(frozenAfter);
         txn.setRemark(remark);
-        transactionMapper.insert(txn);
+        try {
+            transactionMapper.insert(txn);
+        } catch (DuplicateKeyException e) {
+            // 契约附录 H-2：命中 uk_biz_no_type (biz_no, type) 即业务重复，抛 4002 而非静默重复入账
+            log.warn("[wallet] 幂等键重复 bizNo={} type={} userId={}，拒绝重复入账", bizNo, type, userId);
+            throw new BizException(ErrorCode.WALLET_TXN_DUPLICATE);
+        }
         return txn.getTxnNo();
+    }
+
+    /** 是否已存在该业务幂等键的指定类型流水（H-3 重复结算守卫的判据） */
+    private boolean existsTxn(String bizNo, TxnTypeEnum type) {
+        return transactionMapper.selectCount(new LambdaQueryWrapper<WalletTransaction>()
+                .eq(WalletTransaction::getBizNo, bizNo)
+                .eq(WalletTransaction::getType, type.name())) > 0;
     }
 }

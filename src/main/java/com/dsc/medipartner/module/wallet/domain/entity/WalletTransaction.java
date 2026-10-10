@@ -18,6 +18,11 @@ public class WalletTransaction {
     private Long id;
 
     private String txnNo;
+    /**
+     * 业务幂等键（V12，契约附录 H-2）：取值如 orderNo / withdrawNo / rechargeNo。
+     * 与 {@code type} 组成唯一键 {@code uk_biz_no_type}，是资金重复入账的最后防线。
+     */
+    private String bizNo;
     private Long userId;
     private String orderNo;
     private String type;

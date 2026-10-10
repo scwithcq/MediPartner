@@ -9,11 +9,13 @@ import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.PriceResult;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
 import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
+import com.dsc.medipartner.module.order.service.PriceService;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
 import com.dsc.medipartner.module.user.service.CreditService;
@@ -44,7 +46,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * OrderServiceImpl 纯单测：下单回写工单、结束服务落凭证并投递报告、确认结算联动信用分与完成单数。
+ * OrderServiceImpl unit tests: server-side pricing on create (H-1), voucher persistence and
+ * report publishing on finish, settlement plus credit bump on confirm.
  */
 class OrderServiceImplTest {
 
@@ -61,6 +64,7 @@ class OrderServiceImplTest {
     private ReportTaskPublisher reportTaskPublisher;
     private DemandService demandService;
     private CreditService creditService;
+    private PriceService priceService;
     private OrderServiceImpl service;
 
     @BeforeAll
@@ -78,8 +82,9 @@ class OrderServiceImplTest {
         reportTaskPublisher = mock(ReportTaskPublisher.class);
         demandService = mock(DemandService.class);
         creditService = mock(CreditService.class);
+        priceService = mock(PriceService.class);
         service = new OrderServiceImpl(orderMapper, walletService, workerService, stateMachineService,
-                traceService, reportTaskPublisher, demandService, creditService);
+                traceService, reportTaskPublisher, demandService, creditService, priceService);
     }
 
     @AfterEach
@@ -105,15 +110,36 @@ class OrderServiceImplTest {
         return order;
     }
 
+    /** After H-1 the create request no longer carries an amount; pricing is always server side. */
     private CreateOrderRequest createRequest(Long demandId) {
         CreateOrderRequest request = new CreateOrderRequest();
-        request.setSymptomDesc("胸口疼");
-        request.setCity("重庆");
-        request.setHospitalPref("重医附一院");
+        request.setServiceType("ACCOMPANY");
+        request.setSymptomDesc("chest pain");
+        request.setCity("Chongqing");
+        request.setHospitalPref("Hospital A");
         request.setServiceTime(LocalDateTime.now().plusDays(1));
-        request.setAmount(new BigDecimal("200.00"));
         request.setDemandId(demandId);
         return request;
+    }
+
+    /** Stubbed server-side price result */
+    private PriceResult pricedAmount(String amount) {
+        PriceResult result = new PriceResult();
+        result.setServiceType("ACCOMPANY");
+        result.setServiceTypeName("ACCOMPANY");
+        result.setCity("DEFAULT");
+        result.setHours(new BigDecimal("4.0"));
+        result.setBasePrice(new BigDecimal("200.00"));
+        result.setExtraHours(BigDecimal.ZERO.setScale(1));
+        result.setExtraHourPrice(new BigDecimal("30.00"));
+        result.setAmount(new BigDecimal(amount));
+        result.setPriceRuleId(40001L);
+        result.setPriceVersion("1");
+        return result;
+    }
+
+    private void stubPrice() {
+        when(priceService.calc(any(), any(), any())).thenReturn(pricedAmount("200.00"));
     }
 
     private FinishOrderRequest finishRequest() {
@@ -122,7 +148,7 @@ class OrderServiceImplTest {
         request.setGpsLat("29.56");
         request.setGpsLng("106.55");
         request.setWatermarkTime(LocalDateTime.now().format(TS));
-        request.setServiceSummary("服务完成");
+        request.setServiceSummary("done");
         request.setActualHours(new BigDecimal("2.0"));
         return request;
     }
@@ -130,6 +156,7 @@ class OrderServiceImplTest {
     @Test
     void createSetsDemandIdAndMarksOrdered() {
         login(USER_ID);
+        stubPrice();
         String orderNo = service.create(createRequest(100L));
 
         ArgumentCaptor<ServiceOrder> captor = ArgumentCaptor.forClass(ServiceOrder.class);
@@ -145,9 +172,82 @@ class OrderServiceImplTest {
         verify(demandService).markOrdered(100L, orderNo);
     }
 
+    /** H-1 core regression: amount comes from PriceService, never from the client payload. */
+    @Test
+    void createUsesServerSidePriceNotClientValue() {
+        login(USER_ID);
+        stubPrice();
+        service.create(createRequest(null));
+
+        ArgumentCaptor<ServiceOrder> captor = ArgumentCaptor.forClass(ServiceOrder.class);
+        verify(orderMapper).insert(captor.capture());
+        ServiceOrder inserted = captor.getValue();
+        assertThat(inserted.getAmount()).isEqualByComparingTo("200.00");
+        assertThat(inserted.getPriceVersion()).isEqualTo("1");
+        assertThat(inserted.getPriceRuleId()).isEqualTo(40001L);
+        verify(walletService).freeze(eq(USER_ID), any(), eq(new BigDecimal("200.00")));
+    }
+
+    /** Client-displayed amount disagreeing with the recomputed price -&gt; 3010, no freeze, no insert. */
+    @Test
+    void createRejectsExpectAmountMismatchWith3010() {
+        login(USER_ID);
+        stubPrice();
+        CreateOrderRequest request = createRequest(null);
+        request.setExpectAmount(new BigDecimal("0.01"));
+
+        assertThatThrownBy(() -> service.create(request))
+                .isInstanceOfSatisfying(BizException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.PRICE_CHANGED));
+        verify(walletService, never()).freeze(any(), any(), any());
+        verify(orderMapper, never()).insert(any(ServiceOrder.class));
+    }
+
+    /** Stale priceVersion from the client -&gt; 3010. */
+    @Test
+    void createRejectsStalePriceVersionWith3010() {
+        login(USER_ID);
+        stubPrice();
+        CreateOrderRequest request = createRequest(null);
+        request.setPriceVersion("0");
+
+        assertThatThrownBy(() -> service.create(request))
+                .isInstanceOfSatisfying(BizException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.PRICE_CHANGED));
+        verify(walletService, never()).freeze(any(), any(), any());
+    }
+
+    /** Service time less than 30 minutes ahead -&gt; 3007. */
+    @Test
+    void createRejectsTooEarlyServiceTimeWith3007() {
+        login(USER_ID);
+        stubPrice();
+        CreateOrderRequest request = createRequest(null);
+        request.setServiceTime(LocalDateTime.now().plusMinutes(5));
+
+        assertThatThrownBy(() -> service.create(request))
+                .isInstanceOfSatisfying(BizException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SERVICE_TIME_ILLEGAL));
+        verify(walletService, never()).freeze(any(), any(), any());
+    }
+
+    /** Service time more than 30 days ahead -&gt; 3007. */
+    @Test
+    void createRejectsTooFarServiceTimeWith3007() {
+        login(USER_ID);
+        stubPrice();
+        CreateOrderRequest request = createRequest(null);
+        request.setServiceTime(LocalDateTime.now().plusDays(31));
+
+        assertThatThrownBy(() -> service.create(request))
+                .isInstanceOfSatisfying(BizException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SERVICE_TIME_ILLEGAL));
+    }
+
     @Test
     void createWithoutDemandIdSkipsMarkOrdered() {
         login(USER_ID);
+        stubPrice();
         service.create(createRequest(null));
         verify(demandService, never()).markOrdered(any(), any());
     }

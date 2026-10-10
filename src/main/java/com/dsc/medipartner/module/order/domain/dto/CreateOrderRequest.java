@@ -31,6 +31,13 @@ public class CreateOrderRequest {
     @Size(max = 64, message = "就医城市长度不能超过 64")
     private String city;
 
+    /**
+     * 就医城市国标 6 位码（H-12：计价与运力匹配的唯一口径，city 仅作展示）。
+     * 来自 §8.2 字典 CITY。不传时服务端回落全国默认规则 DEFAULT。
+     */
+    @Size(max = 16, message = "城市码长度不能超过 16")
+    private String cityCode;
+
     @Size(max = 255, message = "医院偏好长度不能超过 255")
     private String hospitalPref;
 

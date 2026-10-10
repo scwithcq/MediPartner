@@ -1,0 +1,35 @@
+# 集成测试专用配置（事项 3A）
+#
+# 用途：给 @Tag("integration") 的测试提供真实 MySQL 连接。
+# 独立库 medipartner_test 与开发库 medipartner 隔离，Flyway 会自动建全部表并灌种子数据。
+# 运行方式：mvn test -Pintegration
+#
+# 为什么不用 Testcontainers：本机 Docker 守护进程常态未运行（docker ps 直接失败），
+# 用 Testcontainers 会得到「看起来对但从没真正跑过」的测试。改为直连本机原生 MySQL 8.0.34，
+# 确保这套测试在开发机上真的能执行。
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:medipartner_test}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:cq}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    out-of-order: true
+    # 每次集成测试前清空并重建，保证从干净状态开始
+    clean-disabled: false
+
+# 集成测试不出网、不调真实模型
+medi:
+  ai:
+    provider: deepseek
+    deepseek:
+      api-key: ""
+  mq:
+    type: async
+
+logging:
+  level:
+    com.dsc.medipartner: INFO

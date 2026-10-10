@@ -219,4 +219,48 @@ class PriceServiceImplTest {
         assertThat(result.getExtraHours()).isEqualByComparingTo("2.5");
         assertThat(result.getAmount()).isEqualByComparingTo("212.50");
     }
+
+    // ---------------- 事项 1B：开通城市后，城市专属规则真正被数据命中 ----------------
+
+    /**
+     * 广州（440100）命中专属规则，价格高于全国默认——这是 V16 开通城市后才存在的真实数据路径。
+     */
+    @Test
+    void calcHitsGuangzhouCityRule() {
+        when(ruleMapper.selectOne(any()))
+                .thenReturn(rule("440100", "ACCOMPANY", "220.00", "4.0", "35.00"));
+
+        PriceResult result = service.calc("ACCOMPANY", "440100", new BigDecimal("4.0"));
+
+        assertThat(result.getCity()).isEqualTo("440100");
+        assertThat(result.getAmount()).isEqualByComparingTo("220.00");
+        // 广州加时 35/h：4h -> 5h 加价 35
+        assertThat(service.calc("ACCOMPANY", "440100", new BigDecimal("5.0")).getAmount())
+                .isEqualByComparingTo("255.00");
+    }
+
+    /** 深圳（440300）命中专属规则，且广州与深圳同类型价格不同，证明按 city_code 区分。 */
+    @Test
+    void calcDistinguishesShenzhenFromGuangzhou() {
+        when(ruleMapper.selectOne(any()))
+                .thenReturn(rule("440300", "ACCOMPANY", "230.00", "4.0", "35.00"));
+
+        PriceResult shenzhen = service.calc("ACCOMPANY", "440300", new BigDecimal("4.0"));
+
+        assertThat(shenzhen.getCity()).isEqualTo("440300");
+        assertThat(shenzhen.getAmount()).isEqualByComparingTo("230.00");
+    }
+
+    /** 未开通城市回落全国默认规则（受控回落，不是报错）。 */
+    @Test
+    void calcFallsBackToDefaultForUnopenedCity() {
+        when(ruleMapper.selectOne(any()))
+                .thenReturn(null)   // 该城市无专属规则
+                .thenReturn(rule("DEFAULT", "ACCOMPANY", "200.00", "4.0", "30.00"));
+
+        PriceResult result = service.calc("ACCOMPANY", "999999", new BigDecimal("4.0"));
+
+        assertThat(result.getCity()).isEqualTo("DEFAULT");
+        assertThat(result.getAmount()).isEqualByComparingTo("200.00");
+    }
 }

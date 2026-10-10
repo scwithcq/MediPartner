@@ -6,7 +6,8 @@ on:
   pull_request:
 
 jobs:
-  test:
+  # 单元测试：纯 Mockito，不依赖数据库与外部服务。任何环境都能跑。
+  unit-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,3 +18,46 @@ jobs:
           cache: maven
       - name: Run unit tests
         run: mvn -B test
+
+  # 集成测试：连真实 MySQL 8，验证 SQL/约束/Flyway 与代码一致（事项 3A）。
+  # 本机用原生 MySQL 直连而非 Testcontainers（本机 Docker 常态未运行），
+  # CI 上用 GitHub 提供的 MySQL service 容器，等价于一个真实 MySQL 8.0 实例。
+  integration-test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: cq
+          MYSQL_DATABASE: medipartner_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pcq"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -pcq --silent; then
+              echo "MySQL is ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "MySQL did not become ready in time"; exit 1
+      - name: Run integration tests
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_NAME: medipartner_test
+          DB_USERNAME: root
+          DB_PASSWORD: cq
+        run: mvn -B test -Pintegration

@@ -71,17 +71,29 @@ public class CreditServiceImpl implements CreditService {
                 .eq(WorkerProfile::getUserId, workerUserId)
                 .set(WorkerProfile::getCreditScore, after));
 
+        // 事项 5B：change_score 记【实际差值】而非枚举名义分值。
+        // 信用分钳制在 0~100，满级(100)时 ORDER_COMPLETED(+2) 实际加 0 分，
+        // 若仍记 +2 会让信用明细出现「加 2 分但总分没变」的误导；
+        // 但仍保留该行日志，因为「这一单触发过加分事件」本身是审计需要的信息。
+        int actualDelta = after - before;
+
         CreditChangeLog changeLog = new CreditChangeLog();
         changeLog.setWorkerUserId(workerUserId);
         changeLog.setChangeType(type.name());
-        changeLog.setChangeScore(type.getScore());
+        changeLog.setChangeScore(actualDelta);
         changeLog.setBeforeScore(before);
         changeLog.setAfterScore(after);
         changeLog.setOrderNo(orderNo);
         changeLog.setReviewId(reviewId);
         changeLog.setReason(type.getReason());
         creditChangeLogMapper.insert(changeLog);
-        log.info("[credit] 信用分变动 workerUserId={} type={} {} -> {}", workerUserId, type, before, after);
+        if (actualDelta == 0) {
+            log.info("[credit] 信用分已达边界，实际未变动 workerUserId={} type={} 名义分值={} 当前={}",
+                    workerUserId, type, type.getScore(), before);
+        } else {
+            log.info("[credit] 信用分变动 workerUserId={} type={} {} -> {}（实际 {})",
+                    workerUserId, type, before, after, actualDelta > 0 ? "+" + actualDelta : actualDelta);
+        }
     }
 
     @Override

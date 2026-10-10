@@ -141,7 +141,9 @@ public class OrderServiceImpl implements OrderService {
         checkServiceTime(request.getServiceTime());
 
         // 契约 §5.2 改造点 1 / 附录 H-1：金额一律由服务端计算，前端传入值不参与任何计算
-        PriceResult price = priceService.calc(request.getServiceType(), request.getCity(), request.getHours());
+        // 计价城市码优先取前端显式传入的 cityCode（H-12 的口径），未传则回落服务端内部默认
+        String cityCode = trimToNull(request.getCityCode());
+        PriceResult price = priceService.calc(request.getServiceType(), cityCode, request.getHours());
         checkPriceConsistency(request, price);
 
         String orderNo = OrderNoGenerator.next("MP");
@@ -159,6 +161,8 @@ public class OrderServiceImpl implements OrderService {
         order.setServiceHours(price.getHours());
         order.setSymptomDesc(request.getSymptomDesc());
         order.setCity(request.getCity());
+        // H-12：计价与运力匹配一律按 city_code；命中的城市码由 PriceService 回吐（未命中为 DEFAULT）
+        order.setCityCode(price.getCity());
         order.setContactPhone(trimToNull(request.getContactPhone()));
         order.setHospitalPref(request.getHospitalPref());
         order.setServiceTime(request.getServiceTime());

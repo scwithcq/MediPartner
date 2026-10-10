@@ -51,6 +51,7 @@ public class SecurityConfig {
                         .accessDeniedHandler(restAuthEntryPoint))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error").permitAll()
+                        .requestMatchers("/files/**").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/worker/**").hasRole("WORKER")
                         .requestMatchers("/api/user/**").hasRole("USER")

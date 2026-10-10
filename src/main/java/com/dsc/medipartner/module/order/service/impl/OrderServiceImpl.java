@@ -8,19 +8,28 @@ import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.common.util.OrderNoGenerator;
+import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
+import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
+import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderEvent;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
+import com.dsc.medipartner.module.order.domain.vo.FinishResultVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.order.service.OrderStateMachineService;
+import com.dsc.medipartner.module.order.service.TraceService;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
+import com.dsc.medipartner.module.user.domain.enums.CreditChangeType;
+import com.dsc.medipartner.module.user.service.CreditService;
 import com.dsc.medipartner.module.user.service.WorkerService;
 import com.dsc.medipartner.module.wallet.service.WalletService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -32,6 +41,10 @@ public class OrderServiceImpl implements OrderService {
     private final WalletService walletService;
     private final WorkerService workerService;
     private final OrderStateMachineService stateMachineService;
+    private final TraceService traceService;
+    private final ReportTaskPublisher reportTaskPublisher;
+    private final DemandService demandService;
+    private final CreditService creditService;
 
     @Value("${medi.order.max-active-orders:3}")
     private int maxActiveOrders;
@@ -43,11 +56,17 @@ public class OrderServiceImpl implements OrderService {
     private int lowCreditThreshold;
 
     public OrderServiceImpl(ServiceOrderMapper orderMapper, WalletService walletService,
-                            WorkerService workerService, OrderStateMachineService stateMachineService) {
+                            WorkerService workerService, OrderStateMachineService stateMachineService,
+                            TraceService traceService, ReportTaskPublisher reportTaskPublisher,
+                            DemandService demandService, CreditService creditService) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
         this.stateMachineService = stateMachineService;
+        this.traceService = traceService;
+        this.reportTaskPublisher = reportTaskPublisher;
+        this.demandService = demandService;
+        this.creditService = creditService;
     }
 
     @Override
@@ -68,8 +87,12 @@ public class OrderServiceImpl implements OrderService {
         order.setCity(request.getCity());
         order.setHospitalPref(request.getHospitalPref());
         order.setServiceTime(request.getServiceTime());
+        order.setDemandId(request.getDemandId());
         order.setVersion(0);
         orderMapper.insert(order);
+        if (request.getDemandId() != null) {
+            demandService.markOrdered(request.getDemandId(), orderNo);
+        }
         return orderNo;
     }
 
@@ -142,7 +165,7 @@ public class OrderServiceImpl implements OrderService {
     public void start(Long workerId, String orderNo) {
         ServiceOrder order = requireOrder(orderNo);
         if (!workerId.equals(order.getWorkerId())) {
-            throw new BizException(ErrorCode.FORBIDDEN);
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
         }
         stateMachineService.transition(OrderState.of(order.getOrderStatus()), OrderEvent.START);
 
@@ -160,22 +183,53 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public void finish(Long workerId, String orderNo) {
+    public FinishResultVO finish(Long workerId, String orderNo, FinishOrderRequest request) {
         ServiceOrder order = requireOrder(orderNo);
         if (!workerId.equals(order.getWorkerId())) {
-            throw new BizException(ErrorCode.FORBIDDEN);
+            throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
         }
         stateMachineService.transition(OrderState.of(order.getOrderStatus()), OrderEvent.FINISH);
 
+        // 结束凭证落库（水印校验失败则整体回滚），与状态流转同事务
+        traceService.saveVouchers(workerId, orderNo, request);
+
+        LocalDateTime finishedAt = LocalDateTime.now();
         int updated = orderMapper.update(null, new LambdaUpdateWrapper<ServiceOrder>()
                 .eq(ServiceOrder::getId, order.getId())
                 .eq(ServiceOrder::getOrderStatus, OrderState.IN_SERVICE.getCode())
                 .eq(ServiceOrder::getVersion, order.getVersion())
                 .set(ServiceOrder::getOrderStatus, OrderState.PENDING_CONFIRM.getCode())
-                .set(ServiceOrder::getFinishedAt, LocalDateTime.now())
+                .set(ServiceOrder::getFinishedAt, finishedAt)
+                .set(ServiceOrder::getServiceSummary, trimToNull(request.getServiceSummary()))
+                .set(ServiceOrder::getActualHours, request.getActualHours())
                 .set(ServiceOrder::getVersion, order.getVersion() + 1));
         if (updated != 1) {
             throw new BizException(ErrorCode.ORDER_STATE_ILLEGAL);
+        }
+
+        // 事务提交后再投递 AI 报告任务，避免消费者读到未提交数据
+        publishReportAfterCommit(orderNo);
+
+        FinishResultVO result = new FinishResultVO();
+        result.setOrderNo(orderNo);
+        result.setOrderStatus(OrderState.PENDING_CONFIRM.getCode());
+        result.setFinishedAt(finishedAt);
+        // 报告由 MQ 异步生成，结束服务时恒为 PROCESSING（与 ReportStatus 枚举一致）
+        result.setReportStatus("PROCESSING");
+        return result;
+    }
+
+    /** 注册事务提交后回调投递报告任务；无事务上下文时直接投递（兜底，正常路径都在事务内） */
+    private void publishReportAfterCommit(String orderNo) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    reportTaskPublisher.publishReportTask(orderNo);
+                }
+            });
+        } else {
+            reportTaskPublisher.publishReportTask(orderNo);
         }
     }
 
@@ -200,6 +254,9 @@ public class OrderServiceImpl implements OrderService {
         }
 
         walletService.settle(orderNo, order.getUserId(), order.getWorkerId(), order.getAmount());
+        // 订单完成：信用分 +2 并累计已完成单数（契约 §7.16 备注 1，事件驱动）
+        creditService.change(order.getWorkerId(), CreditChangeType.ORDER_COMPLETED, orderNo, null);
+        workerService.incrementServiceCount(order.getWorkerId());
     }
 
     @Override
@@ -229,6 +286,10 @@ public class OrderServiceImpl implements OrderService {
         return orderMapper.selectCount(new LambdaQueryWrapper<ServiceOrder>()
                 .eq(ServiceOrder::getWorkerId, workerId)
                 .in(ServiceOrder::getOrderStatus, OrderState.ACCEPTED.getCode(), OrderState.IN_SERVICE.getCode()));
+    }
+
+    private String trimToNull(String text) {
+        return StringUtils.hasText(text) ? text.trim() : null;
     }
 
     private ServiceOrder requireOrder(String orderNo) {

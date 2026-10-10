@@ -28,4 +28,7 @@ public class CreateOrderRequest {
 
     private String geoHash;
     private String serviceType;
+
+    /** 关联需求工单 ID（可选）：AI 发单助手转下单时携带，用于把工单置为 ORDERED */
+    private Long demandId;
 }

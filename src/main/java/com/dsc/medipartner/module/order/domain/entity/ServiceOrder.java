@@ -16,6 +16,8 @@ public class ServiceOrder extends BaseEntity {
     private String orderNo;
     private Long userId;
     private Long workerId;
+    /** 关联需求工单 ID（demand_order.id），下单携带则回写工单 OPEN->ORDERED */
+    private Long demandId;
     private BigDecimal amount;
     private Integer orderStatus;
     private String geoHash;
@@ -29,4 +31,8 @@ public class ServiceOrder extends BaseEntity {
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
     private LocalDateTime confirmedAt;
+    /** 陪诊师结束服务时提交的服务小结（AI 报告素材，V9） */
+    private String serviceSummary;
+    /** 实际服务时长（小时，一位小数，V9） */
+    private BigDecimal actualHours;
 }

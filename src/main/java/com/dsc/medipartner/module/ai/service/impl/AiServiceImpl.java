@@ -21,7 +21,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.ResourceAccessException;
@@ -98,13 +97,6 @@ public class AiServiceImpl implements AiService {
         demandService.applyRecommendation(order.getId(), snapshot);
         demandService.incrementRegenerate(order.getId());
         return toVO(order, snapshot, elapsedMs(start));
-    }
-
-    @Override
-    @Async("parseExecutor")
-    public void generateReport(Long orderId) {
-        // 阶段 3：订单完成后汇总轨迹/费用/评价自动生成服务报告，当前仅记录任务
-        log.info("[ai] 收到服务报告生成任务 orderId={}（阶段3实装）", orderId);
     }
 
     /** 检索为空且知识库无 ACTIVE 切片 -> 6001；检索为空但有切片（无命中）继续，Prompt 提示无资料 */

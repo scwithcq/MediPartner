@@ -10,6 +10,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 @Slf4j
 @RestControllerAdvice
@@ -30,6 +31,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public R<Void> handleNotReadable(HttpMessageNotReadableException e) {
         return R.fail(ErrorCode.PARAM_ERROR.getCode(), "请求体格式错误或参数类型不匹配");
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public R<Void> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+        return R.fail(ErrorCode.FILE_SIZE_EXCEED);
     }
 
     @ExceptionHandler(AccessDeniedException.class)

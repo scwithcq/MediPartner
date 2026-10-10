@@ -14,7 +14,4 @@ public interface AiService {
 
     /** 重新生成：仅 OPEN 工单，同单上限 medi.ai.max-regenerate 次 */
     AiAssistVO regenerate(Long userId, AssistRegenerateRequest request);
-
-    /** 订单完成后异步生成服务报告（阶段 3 实装，当前为骨架） */
-    void generateReport(Long orderId);
 }

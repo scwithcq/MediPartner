@@ -1,0 +1,52 @@
+# 冒烟测试专用配置（事项 3C）
+#
+# 目的：让 ApplicationContextSmokeTest 在【完全没有数据库】的环境下也能加载 Spring 上下文。
+#
+# 为什么需要它（2026-10-10 修正）：
+#   冒烟测试最初直接继承 application.yml 的 `active: dev`，而 dev profile 开了
+#   `flyway.enabled=true`。于是上下文加载时 Flyway 会去连 MySQL——在没有数据库的 CI
+#   `unit-test` job 里直接抛 Communications link failure，8 个用例全部 Error。
+#   本机没暴露该问题，因为开发机一直有 MySQL 在跑。这是「本地环境掩盖 CI 问题」的典型案例。
+#
+# 关键设置：
+#   1. `flyway.enabled: false` —— 上下文加载不触发迁移，这是失败的直接原因。
+#   2. HikariCP `initialization-fail-timeout: -1` —— 不在启动时校验连接。
+#      否则 Hikari 仍会在首次 getConnection 时 fail-fast。
+#   3. 冒烟测试本身不执行任何 SQL，所以连接不需要真的可用。
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 指向一个不会真正连接的目标；本 profile 下不会有任何 SQL 执行。
+    # connectTimeout 保持较短，避免 CI 在不可达时白等。
+    url: jdbc:mysql://127.0.0.1:1/medipartner_smoke?useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=200&socketTimeout=200
+    username: root
+    password: cq
+    hikari:
+      # -1 = 不在启动时校验连接，允许数据源在 DB 不可用时仍完成上下文装配
+      initialization-fail-timeout: -1
+      minimum-idle: 0
+      maximum-pool-size: 1
+      connection-timeout: 250
+  flyway:
+    # 关键：冒烟测试只验证装配，不跑迁移
+    enabled: false
+  rabbitmq:
+    host: 127.0.0.1
+    port: 1
+    connection-timeout: 200ms
+
+# 不调用真实模型、不走真实 MQ
+medi:
+  ai:
+    provider: deepseek
+    deepseek:
+      api-key: ""
+  mq:
+    type: async
+  knowledge:
+    # ApplicationRunner 会尝试读写知识库表；冒烟测试不需要，关掉避免连库与拖慢启动
+    auto-seed: false
+
+logging:
+  level:
+    com.dsc.medipartner: INFO

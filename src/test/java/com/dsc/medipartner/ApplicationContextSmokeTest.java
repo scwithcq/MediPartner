@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.test.context.ActiveProfiles;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,11 +28,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>本测试用 {@code @SpringBootTest} 真正加载整个上下文（含 Security、MyBatis-Plus、
  * 所有 @Service/@Component 的依赖注入），任何循环依赖、缺失 Bean、AOP 代理错误都会在此暴露。
  *
- * <p>关键设计：<b>不依赖数据库可用性</b>。上下文加载时 HikariCP 是惰性建连，
- * 且本测试不发起任何 SQL，因此即使 MySQL 未启动也能跑过——它只验证"装配是否正确"。
- * 需要真实 SQL 的验证见 {@code OrderFlowIntegrationTest}（用 {@code integration} profile 单独跑）。
+ * <p><b>不依赖数据库</b>：使用 {@code smoke} profile（{@code application-smoke.yml}），
+ * 该 profile 关闭 Flyway 并令 HikariCP 不校验连接，因此本测试在无 MySQL 的环境（如 CI 的
+ * {@code unit-test} job）也能通过。
+ *
+ * <p><b>2026-10-10 修正</b>：本测试最初<u>没有</u>指定 profile，直接继承 {@code active: dev}，
+ * 而 dev 开了 {@code flyway.enabled=true}——CI 的 unit-test job 无 MySQL，导致
+ * Communications link failure、8 个用例全部 Error。当时本类 javadoc 曾声称"不依赖数据库可用性"，
+ * 该说法是错的（本机一直有 MySQL 才没暴露）。现由 {@code smoke} profile 真正落实该保证。
+ * 需要真实 SQL 的验证见 {@code OrderFlowIntegrationTest}（{@code -Pintegration}）。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
+@ActiveProfiles("smoke")
 class ApplicationContextSmokeTest {
 
     @Autowired

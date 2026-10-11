@@ -23,9 +23,11 @@ import java.util.stream.Collectors;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
+    private final TokenService tokenService;
 
-    public JwtAuthenticationFilter(JwtUtil jwtUtil) {
+    public JwtAuthenticationFilter(JwtUtil jwtUtil, TokenService tokenService) {
         this.jwtUtil = jwtUtil;
+        this.tokenService = tokenService;
     }
 
     @Override
@@ -41,11 +43,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Set<String> roles = authList == null
                         ? Set.of()
                         : authList.stream().map(String::valueOf).collect(Collectors.toSet());
-                LoginUser loginUser = new LoginUser(userId, roles);
-                UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(loginUser, null, loginUser.authorities());
-                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(authentication);
+
+                // 阶段 5（§2.3）：登出后 token 立即失效。
+                // JWT 无状态，不做这一步「退出登录」就只是前端删了本地存储，
+                // 被截获的 token 仍能继续用到自然过期（最长 2 小时）。
+                if (tokenService.isBlacklisted(token)) {
+                    request.setAttribute("authError", ErrorCode.UNAUTHORIZED);
+                } else {
+                    LoginUser loginUser = new LoginUser(userId, roles);
+                    UsernamePasswordAuthenticationToken authentication =
+                            new UsernamePasswordAuthenticationToken(loginUser, null, loginUser.authorities());
+                    authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                }
             } catch (ExpiredJwtException e) {
                 request.setAttribute("authError", ErrorCode.TOKEN_EXPIRED);
             } catch (Exception e) {

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
 import com.dsc.medipartner.common.util.DesensitizeUtil;
+import com.dsc.medipartner.common.util.PhoneUtil;
 import com.dsc.medipartner.module.order.service.OrderService;
 import com.dsc.medipartner.module.user.domain.entity.SysUser;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
@@ -94,6 +95,39 @@ public class UserServiceImpl implements UserService {
             return List.of();
         }
         return userMapper.selectList(new LambdaQueryWrapper<SysUser>().in(SysUser::getPhone, phones));
+    }
+
+    @Override
+    public SysUser getByPhone(String phone) {
+        if (!StringUtils.hasText(phone)) {
+            return null;
+        }
+        return userMapper.selectOne(new LambdaQueryWrapper<SysUser>()
+                .eq(SysUser::getPhone, phone.trim())
+                .last("LIMIT 1"));
+    }
+
+    /**
+     * 绑定/换绑手机号（契约 §2.4 / §2.6）。
+     *
+     * <p><b>唯一性校验必须排除自己</b>：用户把一个号码换成同一个号码（或换绑回自己用过的号）
+     * 是完全合法的操作，若简单判断「该号码已存在」会把自己的号判成「已被占用」，
+     * 用户会陷入无法换绑的死局。
+     */
+    @Override
+    public String bindPhone(Long userId, String phone) {
+        String normalized = PhoneUtil.normalize(phone);
+        if (!PhoneUtil.isValid(normalized)) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "手机号格式不正确");
+        }
+        SysUser existing = getByPhone(normalized);
+        if (existing != null && !existing.getId().equals(userId)) {
+            throw new BizException(ErrorCode.PHONE_ALREADY_BOUND);
+        }
+        userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, userId)
+                .set(SysUser::getPhone, normalized));
+        return DesensitizeUtil.phone(normalized);
     }
 
     @Override

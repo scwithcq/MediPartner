@@ -26,6 +26,19 @@ public interface UserService {
     /** 用户当前未绑定手机号时补绑（入驻申请把联系手机号同步到账号）；已有手机号则不动 */
     void bindPhoneIfAbsent(Long userId, String phone);
 
+    /** 按手机号精确查用户（阶段 5：绑定前判重）；查不到返回 null */
+    SysUser getByPhone(String phone);
+
+    /**
+     * 绑定/换绑手机号（契约 §2.4 / §2.6），已存在该手机号的其它账号时抛 {@code 2002}。
+     *
+     * <p>与 {@link #bindPhoneIfAbsent} 的区别：本方法<b>会覆盖</b>已有手机号，
+     * 且做全局唯一性校验；后者只在空值时补写，用于入驻同步场景。
+     *
+     * @return 脱敏后的手机号（契约要求响应回显 {@code 138****1234}）
+     */
+    String bindPhone(Long userId, String phone);
+
     /**
      * 我的资料（契约 §3.1、附录 H-5）：返回 {@link UserVO} 而非裸实体，
      * {@code phone} 走 {@code DesensitizeUtil} 脱敏；用户不存在抛 2001。

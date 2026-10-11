@@ -107,6 +107,20 @@ public class LocalCacheService implements CacheService {
         return false;
     }
 
+    /**
+     * 返回当前所有<b>未过期</b>键的快照（仅用于测试与诊断）。
+     *
+     * <p>存在的理由：有一类缺陷只能靠「数键的个数」发现——例如重复签发 refreshToken 时
+     * 忘记清理上一枚反向键，会随登录次数不断积压（真实 Redis 上验证时才暴露）。
+     * 只断言「旧 token 失效了」的测试对这种泄漏完全无感，因此需要能观测键集合。
+     */
+    public java.util.Set<String> snapshotKeys() {
+        return store.entrySet().stream()
+                .filter(e -> !e.getValue().expired())
+                .map(Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
     private Instant expireAt(Duration ttl) {
         return ttl == null || ttl.isZero() || ttl.isNegative() ? null : Instant.now().plus(ttl);
     }

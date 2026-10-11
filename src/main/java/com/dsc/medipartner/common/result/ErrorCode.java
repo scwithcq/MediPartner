@@ -17,12 +17,16 @@ public enum ErrorCode {
     USER_NOT_FOUND(2001, "用户不存在"),
     PHONE_ALREADY_BOUND(2002, "该手机号已被其他账号绑定"),
     WORKER_AUDIT_NOT_PASS(2003, "入驻审核未通过，暂不可接单"),
+    SMS_CODE_INVALID(2004, "验证码错误或已过期"),
+    /** 附录 B.2 预留：登录时账号被禁用（阶段 7 管理端停用账号后生效） */
+    USER_DISABLED(2005, "账号已被禁用，请联系客服"),
 
     ORDER_NOT_FOUND(3001, "订单不存在"),
     ORDER_STATE_ILLEGAL(3002, "订单状态不允许该操作"),
     ORDER_ALREADY_ACCEPTED(3003, "手慢一步，该订单已被其他人抢走"),
     ORDER_ACCEPT_LIMIT(3004, "当前接单已达上限，请先完成现有服务"),
     CREDIT_NOT_ENOUGH(3005, "信用分不足，暂无法接单"),
+    ORDER_OUT_OF_DISTANCE(3006, "该订单超出你的接单距离范围"),
     SERVICE_TIME_ILLEGAL(3007, "服务时间不合法（需晚于当前时间且在可预约范围内）"),
     ORDER_NOT_BELONG_TO_USER(3008, "无权操作该订单"),
     PRICE_RULE_NOT_FOUND(3009, "该服务类型暂未开放定价"),

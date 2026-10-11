@@ -60,6 +60,10 @@ class Stage5AuthGeoIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    /** 手机号生成的自增序号；仅用于制造候选值，唯一性由数据库回查保证 */
+    private static final java.util.concurrent.atomic.AtomicInteger PHONE_SEQ =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
     /** 每次用随机 code，避免与库中既有 mock 用户冲突（Flyway 不清理数据） */
     private String uniqueCode() {
         return "stage5-" + UUID.randomUUID();
@@ -339,20 +343,28 @@ class Stage5AuthGeoIntegrationTest {
     }
 
     /**
-     * 生成一个几乎不可能与既有数据冲突的合法手机号。
+     * 生成一个<b>当前数据库中确实未被占用</b>的合法手机号。
      *
-     * <p>用<b>原子自增</b>而非纯随机：集成测试库（medipartner_test）不会被清空，
-     * 同一批测试里若两次随机到同一号码，后一次会撞上 §2.5 同号 60 秒限流，
-     * 表现为与被测逻辑无关的偶发失败——这类 flaky 测试比没有测试更糟。
+     * <p>踩过的坑：最初用「原子自增 + 纳秒尾数」生成，批次内看似唯一，
+     * 但集成测试库（medipartner_test）<b>不会在每次运行前清空</b>，
+     * 且计数器在 JVM 重启后归零——跨次运行就会撞上上次留下的号码，
+     * 表现为 {@code duplicatePhoneReturns2002} 在「准备数据」阶段就抛 2002 而失败。
+     * 这类 flaky 比没有测试更糟：它会让人怀疑被测逻辑，实际却是测试自身的问题。
+     *
+     * <p>现在的做法是「生成后回查数据库确认空闲」，最多重试若干次，从根本上排除冲突。
      */
-    private static final java.util.concurrent.atomic.AtomicInteger PHONE_SEQ =
-            new java.util.concurrent.atomic.AtomicInteger(0);
-
     private String uniquePhone() {
-        // 13 段 + 6 位序号 + 3 位纳秒尾数，保证 11 位且合法、且批次内不重复
-        int seq = PHONE_SEQ.incrementAndGet() % 1_000_000;
-        int tail = (int) (System.nanoTime() % 1000);
-        return "13" + String.format("%06d%03d", seq, tail);
+        for (int attempt = 0; attempt < 50; attempt++) {
+            int seq = PHONE_SEQ.incrementAndGet() % 1_000_000;
+            int tail = (int) (System.nanoTime() % 1000);
+            String candidate = "13" + String.format("%06d%03d", seq, tail);
+            Integer taken = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM sys_user WHERE phone = ?", Integer.class, candidate);
+            if (taken == null || taken == 0) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("连续 50 次未能生成未占用的测试手机号，请检查集成测试库是否异常");
     }
 
     private SmsCodeRequest smsRequest(String phone) {

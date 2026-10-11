@@ -24,7 +24,10 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 申诉实现（契约 §5.14、§5.15）。
@@ -221,6 +224,26 @@ public class AppealServiceImpl implements AppealService {
             return List.of();
         }
         return Arrays.stream(csv.split(",")).map(String::trim).filter(StringUtils::hasText).toList();
+    }
+
+    /**
+     * 找出这批订单中「已暂停自动确认」的订单号（阶段 5）。
+     *
+     * <p>一次性 in 查询，避免定时任务逐单查库形成 N+1。
+     */
+    @Override
+    public Set<String> findAutoConfirmPausedOrderNos(Collection<String> orderNos) {
+        if (orderNos == null || orderNos.isEmpty()) {
+            return Set.of();
+        }
+        List<AppealTicket> tickets = appealMapper.selectList(new LambdaQueryWrapper<AppealTicket>()
+                .select(AppealTicket::getOrderNo)
+                .in(AppealTicket::getOrderNo, orderNos)
+                .eq(AppealTicket::getAutoConfirmPaused, 1));
+        return tickets.stream()
+                .map(AppealTicket::getOrderNo)
+                .filter(StringUtils::hasText)
+                .collect(Collectors.toSet());
     }
 
     private String trimToNull(String text) {

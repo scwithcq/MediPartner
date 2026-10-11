@@ -58,6 +58,11 @@ medi:
     # 不强制 local（否则降级逻辑永远不被执行，等于没有测试覆盖）
     type: auto
     probe-enabled: true
+  job:
+    # 阶段 5：冒烟测试只验证装配，关闭定时任务。
+    # 否则任务会在测试期间真去扫库（本 profile 的库不可达，虽会被异常隔离，
+    # 但会刷出大量 WARN 并拖慢用例）
+    enabled: false
   knowledge:
     # ApplicationRunner 会尝试读写知识库表；冒烟测试不需要，关掉避免连库与拖慢启动
     auto-seed: false

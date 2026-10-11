@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
+import com.dsc.medipartner.module.job.config.JobProperties;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
@@ -69,7 +70,8 @@ class OrderPagingTest {
                 new OrderAssembler(),
                 new VirtualPhoneService(),
                 mock(OrderStatusLogService.class),
-                mock(AppealService.class));
+                mock(AppealService.class),
+                new JobProperties());
 
         if (hall) {
             service.pageHall(query);

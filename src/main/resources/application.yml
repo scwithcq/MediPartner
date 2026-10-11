@@ -70,10 +70,30 @@ medi:
     max-distance-km: 15
     # 阶段 5：服务时间已过或早于当前时间 + 本缓冲（分钟）时返回 3007，避免抢到不可达的单
     service-time-buffer-minutes: 30
-    # 阶段 5 定时任务阈值（§7.2）：全部复用状态机已有事件，不新增流转
-    timeout-cancel-hours: 24
-    auto-confirm-hours: 48
-    abnormal-hours: 12
+  # ================= 阶段 5 定时任务（§7.2）=================
+  # ⚠ 阈值单位一律是【分钟】，不是小时。业务默认值按小时换算：24h=1440、48h=2880、12h=720。
+  # 💡 演示时想做「1 分钟就自动确认」，把 auto-confirm-minutes 改成 1 即可（见下方注释）。
+  job:
+    # 总开关：false 时四类任务全部不执行（压测/排查时可临时关闭）
+    enabled: true
+    # 扫描间隔（秒）。默认 60；调小阈值后若想更快看到效果，可一并调小（如 10）
+    scan-interval-seconds: 60
+    # 单轮每类任务处理上限，防止积压时一次拉太多拖垮数据库
+    batch-size: 200
+    # 超时无人接单自动取消（默认 1440 = 24 小时）
+    timeout-cancel-minutes: 1440
+    # 💡 超时未确认自动完成并结算。演示改这里：2880(48h) → 1 即可 1 分钟自动确认
+    auto-confirm-minutes: 2880
+    # 服务中长时间未结束标记异常（默认 720 = 12 小时）
+    abnormal-minutes: 720
+    # 开始服务后无任何留痕的告警阈值（默认 45 分钟，契约 §7.2 区间 30~60min）
+    trace-timeout-minutes: 45
+    # 留痕超时是否扣信用分（-2）。排查阈值时可先置 false 只告警不扣分
+    trace-timeout-penalty: true
+    # 同一订单只扣一次分，避免每轮扫描重复扣分把信用分扣穿
+    trace-penalty-once-per-order: true
+    # 处理失败后的退避时长（分钟）。防止一笔异常订单被每个扫描周期反复重试刷爆日志；0 = 不退避
+    failure-backoff-minutes: 10
   cache:
     # auto=启动探测 Redis，通则用 Redis、不通降级进程内；local=强制进程内；redis=强制 Redis
     type: ${MEDI_CACHE_TYPE:auto}

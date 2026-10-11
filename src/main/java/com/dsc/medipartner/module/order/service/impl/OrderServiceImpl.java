@@ -13,6 +13,7 @@ import com.dsc.medipartner.common.util.DesensitizeUtil;
 import com.dsc.medipartner.common.util.OrderNoGenerator;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
+import com.dsc.medipartner.module.job.config.JobProperties;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.MarkAbnormalRequest;
@@ -87,6 +88,7 @@ public class OrderServiceImpl implements OrderService {
     private final VirtualPhoneService virtualPhoneService;
     private final OrderStatusLogService statusLogService;
     private final AppealService appealService;
+    private final JobProperties jobProperties;
 
     /** 服务时间需晚于当前时间 30 分钟（契约 §5.2） */
     private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
@@ -117,7 +119,8 @@ public class OrderServiceImpl implements OrderService {
                             PriceService priceService, UserService userService,
                             @Lazy ReviewService reviewService, ActionResolver actionResolver,
                             OrderAssembler orderAssembler, VirtualPhoneService virtualPhoneService,
-                            OrderStatusLogService statusLogService, @Lazy AppealService appealService) {
+                            OrderStatusLogService statusLogService, @Lazy AppealService appealService,
+                            JobProperties jobProperties) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
@@ -134,6 +137,7 @@ public class OrderServiceImpl implements OrderService {
         this.virtualPhoneService = virtualPhoneService;
         this.statusLogService = statusLogService;
         this.appealService = appealService;
+        this.jobProperties = jobProperties;
     }
 
     @Override
@@ -854,6 +858,218 @@ public class OrderServiceImpl implements OrderService {
         return orderMapper.selectCount(new LambdaQueryWrapper<ServiceOrder>()
                 .eq(ServiceOrder::getWorkerId, workerId)
                 .in(ServiceOrder::getOrderStatus, OrderState.ACCEPTED.getCode(), OrderState.IN_SERVICE.getCode()));
+    }
+
+    // ================= 阶段 5：定时任务入口（§7.2） =================
+    //
+    // 设计原则（改动前务必理解）：
+    //   1. 「查候选」与「执行流转」分离。查询只返回 orderNo，执行时重新加载并校验状态，
+    //      避免「查出来到处理之间状态已变」导致误操作。
+    //   2. 所有流转都带 version 乐观锁 + 期望状态条件，影响行数为 0 即视为
+    //      「已被他人处理」并静默跳过——定时任务与人并发是常态，不是异常。
+    //   3. 一律复用状态机已有事件，不自造流转逻辑。
+
+    @Override
+    public List<String> findTimeoutWaitingOrderNos(int limit) {
+        LocalDateTime deadline = LocalDateTime.now().minusMinutes(jobProperties.getTimeoutCancelMinutes());
+        return orderMapper.selectList(new LambdaQueryWrapper<ServiceOrder>()
+                        .select(ServiceOrder::getOrderNo)
+                        .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode())
+                        .lt(ServiceOrder::getCreatedAt, deadline)
+                        .orderByAsc(ServiceOrder::getCreatedAt)
+                        .last("LIMIT " + safeLimit(limit)))
+                .stream().map(ServiceOrder::getOrderNo).toList();
+    }
+
+    /**
+     * 待自动确认的订单。
+     *
+     * <p><b>必须排除 {@code auto_confirm_paused = 1} 的订单</b>（契约 §11 Q5 / §7.2）：
+     * 用户对「待确认」订单发起申诉时，阶段 4 已把该标记写好，
+     * 若此处不排除，就会出现「仲裁还没结论、钱已经结算给陪诊师」的资损。
+     * 阶段 4 的预留就是为这一刻，不需要回头改申诉代码。
+     */
+    @Override
+    public List<String> findAutoConfirmableOrderNos(int limit) {
+        LocalDateTime deadline = LocalDateTime.now().minusMinutes(jobProperties.getAutoConfirmMinutes());
+        List<ServiceOrder> candidates = orderMapper.selectList(new LambdaQueryWrapper<ServiceOrder>()
+                .select(ServiceOrder::getOrderNo)
+                .eq(ServiceOrder::getOrderStatus, OrderState.PENDING_CONFIRM.getCode())
+                .lt(ServiceOrder::getFinishedAt, deadline)
+                .orderByAsc(ServiceOrder::getFinishedAt)
+                .last("LIMIT " + safeLimit(limit)));
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+        List<String> orderNos = candidates.stream().map(ServiceOrder::getOrderNo).toList();
+
+        // 一次性查出被申诉暂停自动确认的单，避免逐单查库（N+1）
+        Set<String> paused;
+        try {
+            paused = appealService.findAutoConfirmPausedOrderNos(orderNos);
+        } catch (Exception e) {
+            // 查不到暂停标记时**宁可全部跳过**：漏自动确认只是延迟结算（用户仍可手动确认），
+            // 而在申诉期间误结算则是真实资损，两者代价不对等
+            log.warn("[order] 查询申诉暂停标记失败，本轮跳过全部自动确认以防资损: {}", e.getMessage());
+            return List.of();
+        }
+        return orderNos.stream().filter(no -> !paused.contains(no)).toList();
+    }
+
+    @Override
+    public List<String> findOverdueInServiceOrderNos(int limit) {
+        LocalDateTime deadline = LocalDateTime.now().minusMinutes(jobProperties.getAbnormalMinutes());
+        return orderMapper.selectList(new LambdaQueryWrapper<ServiceOrder>()
+                        .select(ServiceOrder::getOrderNo)
+                        .eq(ServiceOrder::getOrderStatus, OrderState.IN_SERVICE.getCode())
+                        .lt(ServiceOrder::getStartedAt, deadline)
+                        .orderByAsc(ServiceOrder::getStartedAt)
+                        .last("LIMIT " + safeLimit(limit)))
+                .stream().map(ServiceOrder::getOrderNo).toList();
+    }
+
+    @Override
+    public List<ServiceOrder> findOrdersMissingTrace(int limit) {
+        LocalDateTime deadline = LocalDateTime.now().minusMinutes(jobProperties.getTraceTimeoutMinutes());
+        return orderMapper.selectList(new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getOrderStatus, OrderState.IN_SERVICE.getCode())
+                .lt(ServiceOrder::getStartedAt, deadline)
+                .orderByAsc(ServiceOrder::getStartedAt)
+                .last("LIMIT " + safeLimit(limit)));
+    }
+
+    /**
+     * 系统自动取消超时未接单：{@code 10 -> 60}。
+     *
+     * <p><b>必须解冻资金</b>：下单时已 freeze 了服务费，取消若不 unfreeze，
+     * 用户的钱会永久锁死在冻结态（既不结算也不退还），是明确的资损。
+     */
+    @Override
+    @Transactional
+    public boolean systemTimeoutCancel(String orderNo) {
+        ServiceOrder order = getByOrderNo(orderNo);
+        if (order == null || !isStatus(order, OrderState.WAITING_ACCEPT)) {
+            // 已被用户取消或被陪诊师接走：正常并发，静默跳过
+            return false;
+        }
+        stateMachineService.transition(OrderState.WAITING_ACCEPT, OrderEvent.TIMEOUT_CANCEL);
+
+        int updated = orderMapper.update(null, new LambdaUpdateWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getId, order.getId())
+                .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode())
+                .eq(ServiceOrder::getVersion, order.getVersion())
+                .set(ServiceOrder::getOrderStatus, OrderState.CANCELLED.getCode())
+                .set(ServiceOrder::getCancelReason, "超时无人接单，系统自动取消")
+                .set(ServiceOrder::getVersion, order.getVersion() + 1));
+        if (updated != 1) {
+            return false;
+        }
+
+        walletService.unfreeze(order.getUserId(), orderNo, order.getAmount());
+        statusLogService.record(orderNo, OrderState.WAITING_ACCEPT.getCode(),
+                OrderState.CANCELLED.getCode(), OrderEvent.TIMEOUT_CANCEL.name(),
+                OrderStatusLogServiceImpl.OPERATOR_SYSTEM, null, "超时无人接单，系统自动取消");
+        log.info("[job] 超时未接单自动取消 orderNo={}", orderNo);
+        return true;
+    }
+
+    /**
+     * 系统自动确认完成：{@code 40 -> 50}。
+     *
+     * <p><b>结算路径与手动确认逐行一致</b>（同一个 {@code walletService.settle}、
+     * 同样加信用分与累计单数），唯一区别是 {@code operatorType = SYSTEM}
+     * （契约 §11 Q5：「自动确认走与手动确认完全相同的 settle() 路径」）。
+     * 刻意不另写一套结算逻辑——两份实现迟早会在某次改动后产生分歧，
+     * 而资金路径的分歧就是资损。
+     */
+    @Override
+    @Transactional
+    public boolean systemAutoConfirm(String orderNo) {
+        ServiceOrder order = getByOrderNo(orderNo);
+        if (order == null || !isStatus(order, OrderState.PENDING_CONFIRM)) {
+            return false;
+        }
+        stateMachineService.transition(OrderState.PENDING_CONFIRM, OrderEvent.AUTO_CONFIRM);
+
+        int updated = orderMapper.update(null, new LambdaUpdateWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getId, order.getId())
+                .eq(ServiceOrder::getOrderStatus, OrderState.PENDING_CONFIRM.getCode())
+                .eq(ServiceOrder::getVersion, order.getVersion())
+                .set(ServiceOrder::getOrderStatus, OrderState.COMPLETED.getCode())
+                .set(ServiceOrder::getConfirmedAt, LocalDateTime.now())
+                .set(ServiceOrder::getVersion, order.getVersion() + 1));
+        if (updated != 1) {
+            return false;
+        }
+
+        walletService.settle(orderNo, order.getUserId(), order.getWorkerId(), order.getAmount());
+        statusLogService.record(orderNo, OrderState.PENDING_CONFIRM.getCode(),
+                OrderState.COMPLETED.getCode(), OrderEvent.AUTO_CONFIRM.name(),
+                OrderStatusLogServiceImpl.OPERATOR_SYSTEM, null, "超时未确认，系统自动完成");
+        creditService.change(order.getWorkerId(), CreditChangeType.ORDER_COMPLETED, orderNo, null);
+        workerService.incrementServiceCount(order.getWorkerId());
+        log.info("[job] 超时未确认自动完成并结算 orderNo={}", orderNo);
+        return true;
+    }
+
+    /**
+     * 系统标记异常：{@code 30 -> 70}。
+     *
+     * <p>资金保持冻结不动（既不 settle 也不 unfreeze），只能由管理端收尾（契约 D9）。
+     */
+    @Override
+    @Transactional
+    public boolean systemMarkAbnormal(String orderNo, String reason) {
+        ServiceOrder order = getByOrderNo(orderNo);
+        if (order == null || !isStatus(order, OrderState.IN_SERVICE)) {
+            return false;
+        }
+        stateMachineService.transition(OrderState.IN_SERVICE, OrderEvent.MARK_ABNORMAL);
+
+        String remark = StringUtils.hasText(reason) ? reason.trim() : "服务超时未结束，系统标记异常";
+        int updated = orderMapper.update(null, new LambdaUpdateWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getId, order.getId())
+                .eq(ServiceOrder::getOrderStatus, OrderState.IN_SERVICE.getCode())
+                .eq(ServiceOrder::getVersion, order.getVersion())
+                .set(ServiceOrder::getOrderStatus, OrderState.ABNORMAL.getCode())
+                .set(ServiceOrder::getAbnormalType, "OTHER")
+                .set(ServiceOrder::getAbnormalRemark, remark)
+                .set(ServiceOrder::getVersion, order.getVersion() + 1));
+        if (updated != 1) {
+            return false;
+        }
+
+        statusLogService.record(orderNo, OrderState.IN_SERVICE.getCode(),
+                OrderState.ABNORMAL.getCode(), OrderEvent.MARK_ABNORMAL.name(),
+                OrderStatusLogServiceImpl.OPERATOR_SYSTEM, null, remark);
+
+        // 进管理端仲裁队列；失败不影响主流程（异常状态本身已可检索）
+        try {
+            appealService.createForAbnormal(orderNo,
+                    order.getWorkerId() == null ? order.getUserId() : order.getWorkerId(), remark);
+        } catch (Exception e) {
+            log.warn("[order] 超时异常单自动建申诉工单失败 orderNo={}: {}", orderNo, e.getMessage());
+        }
+        log.info("[job] 服务超时未结束，标记异常 orderNo={}", orderNo);
+        return true;
+    }
+
+    /** 批量上限兜底：防止配置写错（如 0 或负数）导致 LIMIT 0 让任务静默失效 */
+    private int safeLimit(int limit) {
+        return limit <= 0 ? jobProperties.getBatchSize() : limit;
+    }
+
+    /**
+     * 订单当前状态是否等于期望状态。
+     *
+     * <p>用 {@code int} 比较而非 {@code Integer.equals}：{@link OrderState#getCode()} 返回<b>原始 int</b>，
+     * 直接 {@code .equals(...)} 会编译失败；而把 status 拆箱成 int 比较，
+     * 还能顺带避免 {@code order.getOrderStatus()} 为 null 时拆箱 NPE
+     * （历史数据或异常写入都可能出现 null 状态）。
+     */
+    private boolean isStatus(ServiceOrder order, OrderState expected) {
+        Integer current = order.getOrderStatus();
+        return current != null && current == expected.getCode();
     }
 
     private String trimToNull(String text) {

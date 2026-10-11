@@ -6,6 +6,7 @@ import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
+import com.dsc.medipartner.module.job.config.JobProperties;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.dto.PriceResult;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
@@ -73,7 +74,7 @@ class OrderOverviewAndContactTest {
                 mock(DemandService.class), mock(CreditService.class), priceService, userService,
                 mock(ReviewService.class), new ActionResolver(), new OrderAssembler(),
                 new VirtualPhoneService(), mock(OrderStatusLogService.class),
-                mock(AppealService.class));
+                mock(AppealService.class), new JobProperties());
     }
 
     private PriceResult priced() {

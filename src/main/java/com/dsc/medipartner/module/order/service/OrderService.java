@@ -89,4 +89,41 @@ public interface OrderService {
     void markAbnormal(Long workerId, String orderNo, MarkAbnormalRequest request);
 
     long countActive(Long workerId);
+
+    // ---------------- 阶段 5：定时任务入口（§7.2） ----------------
+    //
+    // 以下方法专供定时任务调用。刻意与用户侧方法分开而不是加 operatorType 参数：
+    // ① 用户侧方法都要校验 userId 归属，系统调用没有「当前用户」，
+    //    复用会迫使在用户侧方法里散布 if (system) 分支，反而更容易写漏权限校验；
+    // ② 分开后「谁能触发这个流转」在签名上就一目了然。
+
+    /** 超时未接单的订单号（状态 10 且创建超过阈值），按创建时间升序，最多 limit 条 */
+    java.util.List<String> findTimeoutWaitingOrderNos(int limit);
+
+    /** 结束服务后超时未确认的订单号（状态 40 且 finished_at 超过阈值，且未被申诉暂停自动确认），升序 */
+    java.util.List<String> findAutoConfirmableOrderNos(int limit);
+
+    /** 服务中超时的订单号（状态 30 且 started_at 超过阈值），升序 */
+    java.util.List<String> findOverdueInServiceOrderNos(int limit);
+
+    /**
+     * 系统自动取消（超时无人接单）：{@code 10 -> 60}，事件 {@code TIMEOUT_CANCEL}。
+     *
+     * @return true 表示本次确实发生了流转（false = 已被他人抢先处理，属正常并发）
+     */
+    boolean systemTimeoutCancel(String orderNo);
+
+    /**
+     * 系统自动确认完成：{@code 40 -> 50}，事件 {@code AUTO_CONFIRM}。
+     *
+     * <p><b>结算路径与手动确认完全一致</b>（同一 {@code walletService.settle}），
+     * 仅 {@code operatorType} 记为 {@code SYSTEM}（契约 §11 Q5 明确要求）。
+     */
+    boolean systemAutoConfirm(String orderNo);
+
+    /** 系统标记异常：{@code 30 -> 70}，事件 {@code MARK_ABNORMAL}，资金保持冻结 */
+    boolean systemMarkAbnormal(String orderNo, String reason);
+
+    /** 服务中且已开始超过阈值、但尚无任何留痕的订单号（用于留痕超时告警与扣分） */
+    java.util.List<ServiceOrder> findOrdersMissingTrace(int limit);
 }

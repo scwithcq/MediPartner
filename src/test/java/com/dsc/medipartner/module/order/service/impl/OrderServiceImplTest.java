@@ -7,6 +7,7 @@ import com.dsc.medipartner.common.result.ErrorCode;
 import com.dsc.medipartner.common.security.LoginUser;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
+import com.dsc.medipartner.module.job.config.JobProperties;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.PriceResult;
@@ -103,7 +104,7 @@ class OrderServiceImplTest {
         service = new OrderServiceImpl(orderMapper, walletService, workerService, stateMachineService,
                 traceService, reportTaskPublisher, demandService, creditService, priceService,
                 userService, reviewService, actionResolver, orderAssembler, new VirtualPhoneService(),
-                statusLogService, mock(AppealService.class));
+                statusLogService, mock(AppealService.class), new JobProperties());
     }
 
     @AfterEach

@@ -38,9 +38,18 @@ public final class SortWhitelist {
             "amount", "amount",
             "goodRate", "good_rate",
             "serviceCount", "service_count",
-            "creditScore", "credit_score",
-            // 阶段 5 才实现真实距离计算，此处仅占位；阶段 1.5 由服务层回落默认排序
-            "distance", "geo_hash");
+            "creditScore", "credit_score");
+
+    /**
+     * 需要服务层在内存中排序的属性名（**不对应任何数据库列**）。
+     *
+     * <p><b>为什么 distance 绝不能进 SQL</b>：V1 起 {@code worker_profile}/{@code service_order}
+     * 只存 {@code geo_hash} 字符串。若把 {@code distance} 映射为 {@code geo_hash} 交给
+     * {@code ORDER BY}，得到的是<b>字典序</b>——结果看着有序，实际与地理距离无关，
+     * 属「不报错但答案错误」的隐蔽缺陷（阶段 1.5 曾如此占位）。
+     * 正确做法是 GeoHash 前缀粗筛 + 内存精算距离（契约 §7.4 备注 1）。
+     */
+    private static final Set<String> IN_MEMORY_PROPERTIES = Set.of("distance");
 
     private SortWhitelist() {
     }
@@ -113,9 +122,24 @@ public final class SortWhitelist {
     /** 解析结果：安全的物理列名 + 方向 */
     public record Order(String property, String column, boolean asc) {
 
-        /** 供 SQL 使用的安全列名（保证取自白名单映射，非请求原值） */
+        /**
+         * 供 SQL 使用的安全列名（保证取自白名单映射，非请求原值）。
+         *
+         * @return 列名；返回 {@code null} 表示该属性<b>必须由服务层内存排序</b>
+         *         （如 {@code distance}），调用方不得拼入 SQL
+         */
         public String sqlColumn() {
             return column;
+        }
+
+        /**
+         * 是否需要在服务层内存排序。
+         *
+         * <p>调用方在拼 SQL 前<b>必须先判断本方法</b>：为 true 时不得使用
+         * {@link #sqlColumn()}（其为 null），而应改走内存排序路径。
+         */
+        public boolean requiresInMemorySort() {
+            return column == null || IN_MEMORY_PROPERTIES.contains(property);
         }
     }
 }

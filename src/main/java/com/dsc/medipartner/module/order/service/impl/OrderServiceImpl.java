@@ -604,10 +604,18 @@ public class OrderServiceImpl implements OrderService {
     /**
      * 排序落地（§1.8）：列名只可能来自 {@link SortWhitelist} 枚举常量，
      * 前端原始字符串绝不进入 SQL。非法 sortBy 已在 resolve 内回落默认值，不报错。
+     *
+     * <p>{@code distance}（阶段 5）在 SQL 层无法表达（库里只有 geo_hash，排序会退化为字典序），
+     * 因此这里<b>显式拦截</b>：命中内存排序属性时回落到本接口默认列，
+     * 真实距离排序由服务层在内存精算后完成（§7.4 备注 1 / §7.5）。
      */
     private void applySort(LambdaQueryWrapper<ServiceOrder> wrapper, PageQuery query,
                            SortWhitelist.Spec spec) {
         SortWhitelist.Order order = spec.resolve(query.getSortBy(), query.getOrder());
+        if (order.requiresInMemorySort()) {
+            // 绝不把 null 列名拼进 SQL；回落该接口默认排序，内存排序在调用方随后覆盖
+            order = spec.resolve(null, query.getOrder());
+        }
         wrapper.last("ORDER BY " + order.sqlColumn() + (order.asc() ? " ASC" : " DESC")
                 + ", id DESC");
     }

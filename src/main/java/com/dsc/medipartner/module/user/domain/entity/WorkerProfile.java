@@ -24,6 +24,20 @@ public class WorkerProfile extends BaseEntity {
     private String auditStatus;
     private Integer creditScore;
     private String geoHash;
+
+    /**
+     * 最新上报纬度（V18，§7.4）。
+     *
+     * <p>与 {@link #geoHash} 的分工：geo_hash 用于**前缀粗筛**（前 6 位约 1.2km 精度），
+     * 原始经纬度用于**内存精算距离**（契约 §7.4 备注 1）。仅有 geo_hash 无法算出精确距离。
+     * 用 {@link BigDecimal} 而非 double，避免边界值上出现不可复现的距离判定。
+     */
+    private BigDecimal gpsLat;
+    /** 最新上报经度（V18，§7.4） */
+    private BigDecimal gpsLng;
+    /** 定位最近上报时间（V18），用于判断定位是否已过期 */
+    private LocalDateTime geoUpdatedAt;
+
     private Long auditBy;
     private LocalDateTime auditTime;
     private String auditRemark;

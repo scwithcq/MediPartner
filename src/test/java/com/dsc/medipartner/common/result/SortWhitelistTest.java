@@ -129,7 +129,7 @@ class SortWhitelistTest {
     @Test
     void injectionPayloadsNeverReachSql() {
         Set<String> safeColumns = Set.of("created_at", "service_time", "amount",
-                "good_rate", "service_count", "credit_score", "geo_hash");
+                "good_rate", "service_count", "credit_score");
 
         for (SortWhitelist.Spec spec : SortWhitelist.Spec.values()) {
             for (String payload : INJECTION_PAYLOADS) {
@@ -140,6 +140,9 @@ class SortWhitelistTest {
                 assertThat(ord.property())
                         .as("spec=%s payload=%s", spec, payload)
                         .isIn(spec.allowedProperties());
+                assertThat(ord.requiresInMemorySort())
+                        .as("spec=%s payload=%s", spec, payload)
+                        .isFalse();
             }
         }
     }
@@ -172,10 +175,55 @@ class SortWhitelistTest {
         for (SortWhitelist.Spec spec : SortWhitelist.Spec.values()) {
             for (String property : spec.allowedProperties()) {
                 SortWhitelist.Order ord = spec.resolve(property, "asc");
+                if (ord.requiresInMemorySort()) {
+                    // 内存排序属性（distance）不得有列名，否则会被误拼进 SQL
+                    assertThat(ord.sqlColumn())
+                            .as("spec=%s property=%s", spec, property)
+                            .isNull();
+                    continue;
+                }
                 assertThat(ord.sqlColumn())
                         .as("spec=%s property=%s", spec, property)
                         .matches("[a-z_]+");
             }
         }
+    }
+
+    // ---------------- 阶段 5：distance 必须先被识别为「内存排序」 ----------------
+
+    /**
+     * 回归防护：{@code distance} 绝不能被映射为数据库列。
+     *
+     * <p>阶段 1.5 曾把它占位映射为 {@code geo_hash}，那会让 {@code ORDER BY geo_hash}
+     * 返回<b>字典序</b>——不报错但结果与地理距离无关。本用例锁死该行为，
+     * 防止后续有人图省事把 distance 重新变回列映射。
+     */
+    @Test
+    void distanceNeverMapsToDatabaseColumn() {
+        SortWhitelist.Order hall = SortWhitelist.Spec.ORDER_HALL_ASC.resolve("distance", "asc");
+        assertThat(hall.property()).isEqualTo("distance");
+        assertThat(hall.sqlColumn()).isNull();
+        assertThat(hall.requiresInMemorySort()).isTrue();
+
+        SortWhitelist.Order worker = SortWhitelist.Spec.WORKER_LIST.resolve("distance", "asc");
+        assertThat(worker.sqlColumn()).isNull();
+        assertThat(worker.requiresInMemorySort()).isTrue();
+
+        // 具体列名 geo_hash 不得作为任何属性的映射结果出现
+        for (SortWhitelist.Spec spec : SortWhitelist.Spec.values()) {
+            for (String property : spec.allowedProperties()) {
+                assertThat(spec.resolve(property, "asc").sqlColumn())
+                        .as("spec=%s property=%s", spec, property)
+                        .isNotEqualTo("geo_hash");
+            }
+        }
+    }
+
+    /** 普通属性不受影响：仍返回真实列名且不需要内存排序 */
+    @Test
+    void ordinaryPropertiesStillResolveToColumns() {
+        SortWhitelist.Order ord = SortWhitelist.Spec.ORDER_LIST.resolve("amount", "asc");
+        assertThat(ord.sqlColumn()).isEqualTo("amount");
+        assertThat(ord.requiresInMemorySort()).isFalse();
     }
 }

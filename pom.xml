@@ -129,6 +129,19 @@
             <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
+        <!-- 阶段 5：Redis 首次接入（refreshToken/短信验证码/限流/token 黑名单/定时任务锁）。
+             业务侧不直接依赖 RedisTemplate，统一走 common.cache.CacheService 端口，
+             探测不到 Redis 时自动降级为进程内实现，保证无 Redis 环境（CI）仍可启动与测试 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- 阶段 5：限流切面（@RateLimit 注解式，统一返回 1005） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>

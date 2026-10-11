@@ -15,6 +15,20 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME:medi}
     password: ${RABBITMQ_PASSWORD:medi123}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # 本机 Redis 服务（Q:\Redis\redis.windows-service.conf）配了 requirepass cq。
+      # 不填口令时连接能建立但每个命令都返回 NOAUTH，表现为「缓存静默失效」，
+      # 排查成本很高，故此处显式给出默认值（生产用 REDIS_PASSWORD 覆盖）
+      password: ${REDIS_PASSWORD:cq}
+      # 阶段 5：启动探测与运行期调用的超时。取短值是为了让 Redis 不可达时快速降级，
+      # 而不是拖慢应用启动或让接口长时间挂起
+      timeout: 500ms
+      connect-timeout: 500ms
+      lettuce:
+        shutdown-timeout: 100ms
 
 server:
   port: 8080
@@ -31,11 +45,39 @@ medi:
   jwt:
     secret: ${MEDI_JWT_SECRET:MediPartner_Secret_Key_For_Jwt_Only_Dev_2025_ChangeMeInProd}
     expire-minutes: 120
+    # 阶段 5（§2.2）：refreshToken 有效期 7 天，与 accessToken 分离
+    refresh-expire-minutes: 10080
+  sms:
+    # 阶段 5（§2.5）：开发期固定验证码，不接真实短信网关；生产必须置 false 并接网关
+    mock: true
+    mock-code: "123456"
+    code-expire-seconds: 300
+    # 同手机号发送间隔（§2.5 限流：60s 一次）
+    send-interval-seconds: 60
+  wechat:
+    # 阶段 5（§2.4）：开发期把 phoneCode 直接当手机号入库，便于本地联调
+    mock-phone: true
+    appid: ${MEDI_WECHAT_APPID:}
+    appsecret: ${MEDI_WECHAT_APPSECRET:}
   order:
     max-active-orders: 3
     max-active-orders-low-credit: 1
     min-credit-accept: 60
     low-credit-threshold: 80
+    # 阶段 5（§7.6 / §11 Q4 拍板统一）：抢单距离上限，超出返回 3006。
+    # 文档原有两个键名（max-distance-km / max-accept-distance-km），此处统一为前者，
+    # 后端读不到 max-distance-km 时回落到 max-accept-distance-km，兼容旧配置
+    max-distance-km: 15
+    # 阶段 5：服务时间已过或早于当前时间 + 本缓冲（分钟）时返回 3007，避免抢到不可达的单
+    service-time-buffer-minutes: 30
+    # 阶段 5 定时任务阈值（§7.2）：全部复用状态机已有事件，不新增流转
+    timeout-cancel-hours: 24
+    auto-confirm-hours: 48
+    abnormal-hours: 12
+  cache:
+    # auto=启动探测 Redis，通则用 Redis、不通降级进程内；local=强制进程内；redis=强制 Redis
+    type: ${MEDI_CACHE_TYPE:auto}
+    probe-enabled: true
   file:
     # 本地 OSS 存储根目录（阶段 8 换 MinIO/OSS 时仅改实现）
     base-dir: ${MEDI_FILE_BASE_DIR:./data/files}

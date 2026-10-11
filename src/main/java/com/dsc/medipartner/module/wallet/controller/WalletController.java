@@ -1,6 +1,7 @@
 package com.dsc.medipartner.module.wallet.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.dsc.medipartner.common.ratelimit.RateLimit;
 import com.dsc.medipartner.common.result.PageResult;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
@@ -55,7 +56,13 @@ public class WalletController {
         return R.ok(PageResult.of(page));
     }
 
-    /** §3.8 发起充值：建 PENDING 单并返回模拟支付参数 */
+    /**
+     * §3.8 发起充值：建 PENDING 单并返回模拟支付参数。
+     *
+     * <p>阶段 5 限流：单用户 10 次/分钟（契约 L623）。防止脚本批量建充值单把
+     * {@code recharge_order} 撑爆——每笔单都会留下一条待支付记录与超时任务负担。
+     */
+    @RateLimit(name = "wallet:recharge", limit = 10, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
     @PostMapping("/recharge")
     public R<RechargeVO> recharge(@Valid @RequestBody RechargeRequest request) {
         return R.ok(rechargeService.create(UserContext.userId(), request));
@@ -67,7 +74,13 @@ public class WalletController {
         return R.ok(rechargeService.callback(UserContext.userId(), request));
     }
 
-    /** §7.18 申请提现（陪诊师）：同一时刻只允许一笔处理中 */
+    /**
+     * §7.18 申请提现（陪诊师）：同一时刻只允许一笔处理中。
+     *
+     * <p>阶段 5 限流：单用户 5 次/分钟。业务层已有「同时只允许一笔」的约束，
+     * 加限流是为了挡住「反复申请-失败」的循环，避免无谓的事务与日志。
+     */
+    @RateLimit(name = "wallet:withdraw", limit = 5, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
     @PostMapping("/withdraw/apply")
     public R<WithdrawVO> withdrawApply(@Valid @RequestBody WithdrawApplyRequest request) {
         return R.ok(withdrawService.apply(UserContext.userId(), request));

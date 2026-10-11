@@ -3,6 +3,7 @@ package com.dsc.medipartner.module.dict.controller;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.module.dict.domain.vo.ClientConfigVO;
 import com.dsc.medipartner.module.dict.domain.vo.DictVO;
+import com.dsc.medipartner.module.dict.domain.vo.VersionVO;
 import com.dsc.medipartner.module.dict.service.ClientConfigService;
 import com.dsc.medipartner.module.dict.service.DictService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,5 +44,16 @@ public class CommonDictController {
     @GetMapping("/config")
     public R<ClientConfigVO> config() {
         return R.ok(clientConfigService.getClientConfig());
+    }
+
+    /**
+     * §8.4 版本与契约兼容检查（阶段 5）：匿名，onLaunch 与 §8.3 并行调用。
+     *
+     * <p>真正的价值是 {@code apiCompatVersion}：前端发现服务端值变大即清缓存重拉
+     * 字典与配置，避免旧缓存渲染新契约（契约 §8.4 备注 1）。
+     */
+    @GetMapping("/version")
+    public R<VersionVO> version() {
+        return R.ok(clientConfigService.getVersion());
     }
 }

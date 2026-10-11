@@ -1,6 +1,7 @@
 package com.dsc.medipartner.module.dict.service;
 
 import com.dsc.medipartner.module.dict.domain.vo.ClientConfigVO;
+import com.dsc.medipartner.module.dict.domain.vo.VersionVO;
 
 /**
  * 客户端配置下发（契约 §8.3）。
@@ -12,4 +13,12 @@ import com.dsc.medipartner.module.dict.domain.vo.ClientConfigVO;
 public interface ClientConfigService {
 
     ClientConfigVO getClientConfig();
+
+    /**
+     * §8.4 版本与契约兼容检查（阶段 5）。
+     *
+     * <p>同样遵循「读不到就用内置默认值」的降级原则：本接口在 {@code onLaunch} 与 §8.3
+     * 并行调用，一旦失败会阻断启动，因此绝不能因为配置缺失而报错。
+     */
+    VersionVO getVersion();
 }

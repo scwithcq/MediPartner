@@ -70,7 +70,16 @@ public interface OrderService {
     /** §7.7 内部：陪诊师订单实体分页 */
     IPage<ServiceOrder> pageWorkerOrders(Long workerId, OrderQuery query);
 
-    void accept(Long workerId, String orderNo);
+    /**
+     * §7.6 抢单（阶段 5 加固）。
+     *
+     * <p>阶段 5 新增两项校验：距离超出 {@code medi.order.max-distance-km} 返回 {@code 3006}；
+     * 服务时间已过或过近返回 {@code 3007}。
+     * 校验通过后返回完整详情，让前端省掉一次详情请求（契约 §7.6）。
+     *
+     * @param request 可空的抢单上下文（实时定位、客户端时间）
+     */
+    OrderDetailVO accept(Long workerId, String orderNo, com.dsc.medipartner.module.order.domain.dto.AcceptOrderRequest request);
 
     /** §7.11 开始服务：写入 GPS 与到场信息，落流转日志（位置偏离只记不拦） */
     void start(Long workerId, String orderNo, StartServiceRequest request);

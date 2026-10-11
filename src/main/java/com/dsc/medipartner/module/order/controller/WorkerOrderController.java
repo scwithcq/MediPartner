@@ -5,6 +5,7 @@ import com.dsc.medipartner.common.result.PageQuery;
 import com.dsc.medipartner.common.result.PageResult;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
+import com.dsc.medipartner.module.order.domain.dto.AcceptOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.MarkAbnormalRequest;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
@@ -51,10 +52,15 @@ public class WorkerOrderController {
         return R.ok(PageResult.of(page));
     }
 
+    /**
+     * §7.6 抢单（阶段 5 加固）：距离超限 3006、服务时间不可达 3007。
+     *
+     * <p>返回完整详情，前端可直接进入服务页，省掉一次 §7.8 详情请求。
+     */
     @PostMapping("/{orderNo}/accept")
-    public R<Void> accept(@PathVariable String orderNo) {
-        orderService.accept(UserContext.userId(), orderNo);
-        return R.ok();
+    public R<OrderDetailVO> accept(@PathVariable String orderNo,
+                                   @RequestBody(required = false) AcceptOrderRequest request) {
+        return R.ok(orderService.accept(UserContext.userId(), orderNo, request));
     }
 
     @GetMapping("/list")

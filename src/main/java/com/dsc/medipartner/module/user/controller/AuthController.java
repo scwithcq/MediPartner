@@ -1,5 +1,6 @@
 package com.dsc.medipartner.module.user.controller;
 
+import com.dsc.medipartner.common.ratelimit.RateLimit;
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.module.user.domain.dto.BindPhoneRequest;
@@ -73,13 +74,26 @@ public class AuthController {
         return R.ok(Map.of("phone", phone));
     }
 
-    /** §2.5 发送短信验证码：匿名，同手机号 60 秒一次（超限 1005） */
+    /**
+     * §2.5 发送短信验证码：匿名，同手机号 60 秒一次（超限 1005）。
+     *
+     * <p>限流按<b>手机号</b>而非 IP：限流对象是「这个号码被骚扰的次数」，
+     * 按 IP 限的话攻击者换个出口 IP 就能继续轰炸同一号码（短信资损）。
+     * 每日上限 20 次对齐契约 §2.5。
+     */
+    @RateLimit(name = "sms:code", limit = 20, windowSeconds = 86400, dimension = RateLimit.Dimension.PHONE)
     @PostMapping("/sms/code")
     public R<SmsCodeVO> sendSmsCode(@RequestBody SmsCodeRequest request) {
         return R.ok(smsService.sendCode(request));
     }
 
-    /** §2.6 短信验证码绑定手机号（§2.4 的兜底路径） */
+    /**
+     * §2.6 短信验证码绑定手机号（§2.4 的兜底路径）。
+     *
+     * <p>限流同用户 5 次/小时（契约 §2.6）：防止用本接口暴力枚举验证码——
+     * 6 位验证码若可无限尝试，5 分钟内足以撞出结果，整个验证码机制就白做了。
+     */
+    @RateLimit(name = "phone:bind", limit = 5, windowSeconds = 3600, dimension = RateLimit.Dimension.USER)
     @PostMapping("/phone/bind")
     public R<Map<String, String>> bindPhone(@RequestBody BindPhoneRequest request) {
         String phone = authService.bindPhoneBySms(UserContext.userId(), request);

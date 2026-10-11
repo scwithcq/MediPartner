@@ -15,6 +15,7 @@ import com.dsc.medipartner.common.util.OrderNoGenerator;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.job.config.JobProperties;
+import com.dsc.medipartner.module.order.domain.dto.AcceptOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.CreateOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.FinishOrderRequest;
 import com.dsc.medipartner.module.order.domain.dto.MarkAbnormalRequest;
@@ -108,6 +109,26 @@ public class OrderServiceImpl implements OrderService {
     private int minCreditAccept;
     @Value("${medi.order.low-credit-threshold:80}")
     private int lowCreditThreshold;
+
+    /**
+     * 抢单距离上限（km，阶段 5 §7.6）。
+     *
+     * <p>配置键以 §7.6 的 {@code medi.order.max-distance-km} 为准（§11 Q4 曾写
+     * {@code max-accept-distance-km}，两处冲突时以接口章节为准）；
+     * 默认 15km 取自 §7.6 的建议值（Q4 的 10km 更严，课设联调易抢不到单）。
+     * ≤ 0 表示关闭该校验。
+     */
+    @Value("${medi.order.max-distance-km:15}")
+    private double maxDistanceKm;
+
+    /**
+     * 抢单时服务时间的最小提前量（分钟，阶段 5 §7.6 的 {@code 3007}）。
+     *
+     * <p>比下单校验（§5.2 的 30 分钟）保持同口径：下单时合规的单在抢单时也应当合规，
+     * 两者用不同阈值会造成「能下单但没人能接」的怪状态。
+     */
+    @Value("${medi.order.service-time-buffer-minutes:30}")
+    private int serviceTimeBufferMinutes;
 
     /**
      * {@code reviewService} 用 {@link Lazy} 注入：ReviewServiceImpl 需要 OrderService 校验订单状态，
@@ -841,7 +862,7 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public void accept(Long workerId, String orderNo) {
+    public OrderDetailVO accept(Long workerId, String orderNo, AcceptOrderRequest request) {
         ServiceOrder order = requireOrder(orderNo);
 
         WorkerProfile profile = workerService.getByUserId(workerId);
@@ -852,6 +873,15 @@ public class OrderServiceImpl implements OrderService {
         if (countActive(workerId) >= limit) {
             throw new BizException(ErrorCode.ORDER_ACCEPT_LIMIT);
         }
+
+        // §7.6 阶段 5：服务时间可达性校验（3007）。
+        // 必须在乐观锁更新之前做——抢到单再发现服务时间已过，用户还得再取消一次。
+        assertServiceTimeReachable(order);
+
+        // §7.6 阶段 5：距离校验（3006）。
+        // ⚠ 校验放在 Service 层而非 DTO 注解：注解失败会被 GlobalExceptionHandler
+        // 统一压成 1001，契约要求的 3006 将永远拿不到（历史教训：RechargeRequest 的 4006）。
+        assertWithinAcceptDistance(workerId, order, request);
 
         stateMachineService.transition(OrderState.of(order.getOrderStatus()), OrderEvent.ACCEPT);
 
@@ -868,7 +898,100 @@ public class OrderServiceImpl implements OrderService {
         }
         statusLogService.record(orderNo, OrderState.WAITING_ACCEPT.getCode(),
                 OrderState.ACCEPTED.getCode(), OrderEvent.ACCEPT.name(),
-                OrderStatusLogServiceImpl.OPERATOR_WORKER, workerId, null);
+                OrderStatusLogServiceImpl.OPERATOR_WORKER, workerId,
+                buildAcceptRemark(request));
+
+        // §7.6 阶段 1.5：返回完整详情，让前端省掉一次详情请求直接进入服务页
+        return getWorkerOrderDetail(workerId, orderNo);
+    }
+
+    /**
+     * 服务时间可达性校验（§7.6 错误码 {@code 3007}）。
+     *
+     * <p>判定：{@code serviceTime} 必须晚于「当前时间 + 缓冲」。缓冲用于排除
+     * 「现在下单、5 分钟后就要服务」这类实际赶不到的单——若只校验「未过期」，
+     * 陪诊师会在路上就超时，然后被定时任务标记异常，双方都受损。
+     */
+    private void assertServiceTimeReachable(ServiceOrder order) {
+        LocalDateTime serviceTime = order.getServiceTime();
+        if (serviceTime == null) {
+            // 无服务时间的历史数据不做拦截：宁可放过也不误拦（契约未定义该情形）
+            return;
+        }
+        LocalDateTime earliest = LocalDateTime.now().plusMinutes(
+                Math.max(serviceTimeBufferMinutes, 0));
+        if (serviceTime.isBefore(earliest)) {
+            throw new BizException(ErrorCode.SERVICE_TIME_ILLEGAL);
+        }
+    }
+
+    /**
+     * 抢单距离校验（§7.6 错误码 {@code 3006}）。
+     *
+     * <p><b>不硬拦的两种情况</b>：
+     * <ol>
+     *   <li>任一坐标缺失（陪诊师没传实时定位 / 订单没有 geo_hash）——为了不误伤
+     *       定位失败或拒绝授权的用户，此时放行（契约 §7.4 备注 3：定位失败不阻塞主流程）</li>
+     *   <li>距离上限配置 ≤ 0 —— 视为关闭该校验（便于联调期临时放开）</li>
+     * </ol>
+     *
+     * <p>距离用 {@code order.geo_hash} 解码出的格中心计算（订单表无原始经纬度列），
+     * 误差上界为格子尺寸（6 位约 ±0.6km），对「是否超过 15km」的判定足够。
+     */
+    private void assertWithinAcceptDistance(Long workerId, ServiceOrder order, AcceptOrderRequest request) {
+        if (maxDistanceKm <= 0) {
+            return;
+        }
+        if (!StringUtils.hasText(order.getGeoHash())) {
+            return;
+        }
+        // 优先用抢单请求里的实时定位；没传则回落到该陪诊师最近一次上报的位置
+        BigDecimal workerLat = GeoUtil.parseCoordinate(request == null ? null : request.getGpsLat());
+        BigDecimal workerLng = GeoUtil.parseCoordinate(request == null ? null : request.getGpsLng());
+        if (!GeoUtil.isValid(workerLat, workerLng)) {
+            WorkerProfile profile = workerService.getByUserId(workerId);
+            if (profile == null) {
+                return;
+            }
+            workerLat = profile.getGpsLat();
+            workerLng = profile.getGpsLng();
+        }
+        if (!GeoUtil.isValid(workerLat, workerLng)) {
+            // 拿不到陪诊师位置 → 放行，不因定位缺失而阻止接单
+            return;
+        }
+
+        double[] center = GeoUtil.decodeGeoHashCenter(order.getGeoHash());
+        if (center == null) {
+            return;
+        }
+        BigDecimal distance = GeoUtil.distanceKm(workerLat, workerLng,
+                BigDecimal.valueOf(center[0]), BigDecimal.valueOf(center[1]));
+        if (distance != null && distance.doubleValue() > maxDistanceKm) {
+            // 文案带上具体超出量，前端可直接展示（契约 §7.6：提示具体超出多少公里）
+            throw new BizException(ErrorCode.ORDER_OUT_OF_DISTANCE,
+                    String.format("该订单距你 %s 公里，超出 %.0f 公里的接单范围",
+                            distance.toPlainString(), maxDistanceKm));
+        }
+    }
+
+    /** 抢单留痕备注：记录客户端点击时间与定位，供抢单争议排查（§7.6 请求体说明） */
+    private String buildAcceptRemark(AcceptOrderRequest request) {
+        if (request == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (StringUtils.hasText(request.getGpsLat()) && StringUtils.hasText(request.getGpsLng())) {
+            sb.append("接单位置 ").append(request.getGpsLat().trim())
+                    .append(",").append(request.getGpsLng().trim());
+        }
+        if (StringUtils.hasText(request.getClientTs())) {
+            if (sb.length() > 0) {
+                sb.append("；");
+            }
+            sb.append("客户端时间 ").append(request.getClientTs().trim());
+        }
+        return sb.length() == 0 ? null : sb.toString();
     }
 
     @Override

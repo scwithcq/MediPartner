@@ -55,10 +55,23 @@ medi:
     # 同手机号发送间隔（§2.5 限流：60s 一次）
     send-interval-seconds: 60
   wechat:
-    # 阶段 5（§2.4）：开发期把 phoneCode 直接当手机号入库，便于本地联调
+    # ================= 阶段 6：真实微信能力 =================
+    # auto（默认）= 凭证齐备用真实接口、缺凭证用 mock；true = 强制 mock；false = 强制真实。
+    # 💡 配好下面两项后【无需改动本开关】自动切到真实接口，避免"忘了改开关"导致
+    #    生产环境一直在用假 openid 建号（最危险的一类配置错误）。
+    # ⚠ 生产建议显式写 false：这样缺凭证会在首次调用时明确报错，而不是悄悄降级。
+    mock: ${MEDI_WECHAT_MOCK:auto}
+    # 开发期把 phoneCode 直接当手机号入库，便于没有已认证小程序时联调（§2.4）
     mock-phone: true
     appid: ${MEDI_WECHAT_APPID:}
     appsecret: ${MEDI_WECHAT_APPSECRET:}
+    # 微信接口地址；测试时可指向本地桩服务
+    base-url: ${MEDI_WECHAT_BASE_URL:https://api.weixin.qq.com}
+    # 接口超时（毫秒）与重试次数（不含首次，仅对网络异常/5xx 重试）
+    timeout-ms: 5000
+    max-retries: 1
+    # session_key 缓存时长（秒），供后续解密用户信息/手机号使用
+    session-key-ttl-seconds: 1800
   order:
     max-active-orders: 3
     max-active-orders-low-credit: 1

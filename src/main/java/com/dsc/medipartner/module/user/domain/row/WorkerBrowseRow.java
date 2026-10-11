@@ -31,4 +31,13 @@ public class WorkerBrowseRow {
     /** worker_profile.status：1 可接单、0 停用；browseDetail 用于 §6.2 的 2003 闸门 */
     private Integer status;
     private LocalDateTime updatedAt;
+
+    /**
+     * 阶段 5（§7.4）：陪诊师最新上报的经纬度，<b>仅用于服务层内存精算距离</b>。
+     *
+     * <p>刻意不映射到任何对外 VO——坐标属敏感位置数据，
+     * 前端只需要 {@code distanceKm} 这个结果，不需要原始坐标。
+     */
+    private BigDecimal gpsLat;
+    private BigDecimal gpsLng;
 }

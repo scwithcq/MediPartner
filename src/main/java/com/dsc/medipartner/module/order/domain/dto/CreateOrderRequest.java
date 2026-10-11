@@ -50,6 +50,21 @@ public class CreateOrderRequest {
     @Size(max = 32, message = "GeoHash 长度不能超过 32")
     private String geoHash;
 
+    /**
+     * 阶段 5（§5.2 / 契约 L739）：就诊定位经纬度，与 {@code geoHash} <b>二选一</b>。
+     *
+     * <p>传坐标时后端代算 GeoHash 落库；两者都传时以 {@code geoHash} 为准
+     * （前端已算好的值优先，避免对同一位置产生两种编码）。
+     *
+     * <p>为什么不强制前端自己算：GeoHash 编码顺序（经纬交错）很容易写错，
+     * 而写错不会报错、只会让就近排序悄悄失效。让后端兜底更可靠。
+     */
+    @Size(max = 32, message = "gpsLat 长度不能超过 32")
+    private String gpsLat;
+
+    @Size(max = 32, message = "gpsLng 长度不能超过 32")
+    private String gpsLng;
+
     /** 联系电话；不传则用账号绑定手机号 */
     @Pattern(regexp = "^$|^1\\d{10}$", message = "联系电话格式不正确")
     private String contactPhone;

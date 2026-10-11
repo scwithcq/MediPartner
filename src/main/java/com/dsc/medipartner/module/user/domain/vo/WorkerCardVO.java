@@ -30,4 +30,12 @@ public class WorkerCardVO {
     private List<String> tags;
     /** 信用分不低于 60 且未达接单上限 */
     private Boolean accepting;
+
+    /**
+     * 阶段 5（§6.1）：距查询者的距离（公里，一位小数）。
+     *
+     * <p>仅在请求携带 {@code gpsLat}/{@code gpsLng} 时有值；
+     * 未传坐标时保持 {@code null}（JSON 键缺失），不下发 0。
+     */
+    private java.math.BigDecimal distanceKm;
 }

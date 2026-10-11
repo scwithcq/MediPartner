@@ -10,6 +10,7 @@ import com.dsc.medipartner.common.result.PageQuery;
 import com.dsc.medipartner.common.result.SortWhitelist;
 import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.common.util.DesensitizeUtil;
+import com.dsc.medipartner.common.util.GeoUtil;
 import com.dsc.medipartner.common.util.OrderNoGenerator;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
@@ -62,6 +63,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -164,7 +166,7 @@ public class OrderServiceImpl implements OrderService {
         order.setPriceVersion(price.getPriceVersion());
         order.setPriceRuleId(price.getPriceRuleId());
         order.setOrderStatus(OrderState.WAITING_ACCEPT.getCode());
-        order.setGeoHash(request.getGeoHash());
+        order.setGeoHash(resolveOrderGeoHash(request));
         order.setServiceType(price.getServiceType());
         order.setServiceHours(price.getHours());
         order.setSymptomDesc(request.getSymptomDesc());
@@ -235,13 +237,175 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public IPage<OrderCardVO> pageHallCards(Long workerId, OrderQuery query) {
-        IPage<ServiceOrder> page = pageHall(query);
-        // §7.5：大厅是「谁都能看到、谁先抢谁得」，不下发 actions[]，可抢与否由 §7.1 的 accepting 判断
-        List<OrderCardVO> cards = new ArrayList<>(page.getRecords().size());
-        for (ServiceOrder order : page.getRecords()) {
-            cards.add(orderAssembler.toCard(order, null, null, List.of()));
+        BigDecimal workerLat = GeoUtil.parseCoordinate(query.getGpsLat());
+        BigDecimal workerLng = GeoUtil.parseCoordinate(query.getGpsLng());
+        boolean hasWorkerGeo = GeoUtil.isValid(workerLat, workerLng);
+        boolean sortByDistance = hasWorkerGeo && isDistanceSort(query);
+
+        List<ServiceOrder> records;
+        long total;
+        long current = query.getEffectivePageNum();
+        long size = query.getEffectivePageSize();
+
+        if (sortByDistance) {
+            // 距离排序无法交给 SQL（库里只有 geo_hash，ORDER BY 会退化成字典序）。
+            // 做法：跳过 DB 分页，取出符合筛选条件的全部候选（已限上限），
+            // 内存精算距离后排序，再手工切片分页。
+            //
+            // ⚠ 取舍说明：这是「全量拉取 + 内存排序」，在订单量很大时不如 DB 分页高效。
+            // 本项目为课设规模（大厅候选通常几十到几百条），且下面加了 DISTANCE_SORT_MAX_CANDIDATES
+            // 上限兜底，可接受。若将来量级上升，应改为「GeoHash 前缀分桶 + 桶内查询」。
+            List<ServiceOrder> candidates = loadHallCandidatesForDistanceSort(query);
+            // 尊重 §1.8 的 order 方向：契约把 sortBy/order 一并纳入排序白名单，
+            // 只认 sortBy 而忽略 order 会让 order=desc 静默失效（返回升序却看似正常）。
+            boolean ascending = SortWhitelist.Spec.ORDER_HALL_ASC
+                    .resolve(query.getSortBy(), query.getOrder()).asc();
+            Comparator<ServiceOrder> byDistance = Comparator.comparing(
+                    (ServiceOrder o) -> distanceToOrder(workerLat, workerLng, o),
+                    Comparator.nullsLast(Comparator.naturalOrder()));
+            List<ServiceOrder> sorted = candidates.stream()
+                    .sorted((ascending ? byDistance : byDistance.reversed())
+                            // 距离相同时按 serviceTime 升序，保证排序稳定可复现。
+                            // ⚠ 这一层刻意<b>不</b>随 order 反转：它是「同距离内的确定性兜底」，
+                            // 而非用户可见的排序语义；跟着反转会让翻页时顺序抖动。
+                            .thenComparing(ServiceOrder::getServiceTime,
+                                    Comparator.nullsLast(Comparator.naturalOrder()))
+                            .thenComparing(ServiceOrder::getId))
+                    .toList();
+            total = sorted.size();
+            int from = (int) Math.min((current - 1) * size, sorted.size());
+            int to = (int) Math.min(from + size, sorted.size());
+            records = sorted.subList(from, to);
+        } else {
+            IPage<ServiceOrder> page = pageHall(query);
+            records = page.getRecords();
+            total = page.getTotal();
         }
-        return mapPage(page, cards);
+
+        List<OrderCardVO> cards = new ArrayList<>(records.size());
+        long timeoutMinutes = jobProperties.getTimeoutCancelMinutes();
+        for (ServiceOrder order : records) {
+            // §7.5：大厅是「谁都能看到、谁先抢谁得」，不下发 actions[]
+            OrderCardVO card = orderAssembler.toCard(order, null, null, List.of());
+            if (hasWorkerGeo) {
+                // 未传坐标时保持 null → 键缺失（契约 §7.5）
+                card.setDistanceKm(distanceToOrder(workerLat, workerLng, order));
+            }
+            card.setCountdownSeconds(countdownSeconds(order, timeoutMinutes));
+            cards.add(card);
+        }
+
+        Page<OrderCardVO> result = new Page<>(current, size, total);
+        result.setRecords(cards);
+        return result;
+    }
+
+    /**
+     * 距离排序模式下取出全部候选（不分页）。
+     *
+     * <p>上限 {@link #DISTANCE_SORT_MAX_CANDIDATES} 是保护措施：万一某个城市堆积了大量待接单，
+     * 无上限的全量加载会把内存和响应时间拖垮。超出上限时只对最近发布的部分排序，
+     * 并记录 WARN 提示需要改用分桶方案。
+     */
+    private static final int DISTANCE_SORT_MAX_CANDIDATES = 2000;
+
+    private List<ServiceOrder> loadHallCandidatesForDistanceSort(OrderQuery query) {
+        LambdaQueryWrapper<ServiceOrder> wrapper = new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode())
+                // 距离排序必须拿到坐标，故只取已落 geo_hash 的单。
+                // 建单时 geo_hash 由下单带的位置生成，缺失属异常数据，跳过而非报错。
+                .isNotNull(ServiceOrder::getGeoHash);
+        applyOrderFilters(wrapper, query);
+        applyMinAmount(wrapper, query);
+        // 即使走内存排序，也用 serviceTime 作为 DB 侧预排序：
+        // 万一触发上限截断，留下的至少是「最近要服务」的单，而不是随机的一批
+        wrapper.orderByAsc(ServiceOrder::getServiceTime).last("LIMIT " + DISTANCE_SORT_MAX_CANDIDATES);
+
+        List<ServiceOrder> list = orderMapper.selectList(wrapper);
+        if (list.size() >= DISTANCE_SORT_MAX_CANDIDATES) {
+            log.warn("[order] 距离排序候选达到上限 {}，可能存在数据积压，建议改用 GeoHash 分桶查询", list.size());
+        }
+        return list;
+    }
+
+    /** 查询是否要求按距离排序（白名单已保证 sortBy 合法） */
+    private boolean isDistanceSort(OrderQuery query) {
+        SortWhitelist.Order order = SortWhitelist.Spec.ORDER_HALL_ASC
+                .resolve(query.getSortBy(), query.getOrder());
+        return "distance".equals(order.property());
+    }
+
+    /**
+     * 订单到陪诊师的距离（km）。
+     *
+     * <p><b>为什么能用 geo_hash 算出距离</b>：本项目 {@code service_order} 只存了 GeoHash
+     * （无原始经纬度列），而 GeoHash 字符串本身<b>编码了格子的中心坐标</b>——
+     * 解码即得该格中心点，用它代替订单真实坐标，误差上界就是格子尺寸
+     * （6 位约 ±0.6km）。对「就近排序」这个用途完全够用。
+     *
+     * <p>若订单没有 geo_hash，返回 {@code null} 表示「无法计算」，
+     * 排序时排到最后，而不是当成 0（0 会被误读为最近）。
+     */
+    private BigDecimal distanceToOrder(BigDecimal workerLat, BigDecimal workerLng, ServiceOrder order) {
+        if (!StringUtils.hasText(order.getGeoHash())) {
+            return null;
+        }
+        double[] center = GeoUtil.decodeGeoHashCenter(order.getGeoHash());
+        if (center == null) {
+            return null;
+        }
+        return GeoUtil.distanceKm(workerLat, workerLng,
+                BigDecimal.valueOf(center[0]), BigDecimal.valueOf(center[1]));
+    }
+
+    /**
+     * 距超时自动取消的剩余秒数（§7.5）。
+     *
+     * <p>以订单创建时间 + {@code medi.job.timeout-cancel-minutes} 为超时时刻。
+     * 已过期返回 0（前端据此显示「即将取消」），不返回负数。
+     */
+    private Long countdownSeconds(ServiceOrder order, long timeoutMinutes) {
+        if (order.getCreatedAt() == null) {
+            return null;
+        }
+        LocalDateTime deadline = order.getCreatedAt().plusMinutes(timeoutMinutes);
+        long remaining = java.time.Duration.between(LocalDateTime.now(), deadline).getSeconds();
+        return Math.max(remaining, 0L);
+    }
+
+    /** §7.5 最低客单价过滤（阶段 5） */
+    private void applyMinAmount(LambdaQueryWrapper<ServiceOrder> wrapper, OrderQuery query) {
+        if (StringUtils.hasText(query.getMinAmount())) {
+            try {
+                wrapper.ge(ServiceOrder::getAmount, new BigDecimal(query.getMinAmount().trim()));
+            } catch (NumberFormatException e) {
+                // 金额格式非法时忽略该筛选而非报错（§1.8 的一贯原则：筛选参数出错不阻断列表）
+                log.warn("[order] minAmount 格式非法，已忽略该筛选: {}", query.getMinAmount());
+            }
+        }
+    }
+
+    @Override
+    public long countNearbyHallOrders(Long workerId, BigDecimal lat, BigDecimal lng) {
+        // 口径与大厅列表一致：状态 10 + 已落 geo_hash
+        LambdaQueryWrapper<ServiceOrder> wrapper = new LambdaQueryWrapper<ServiceOrder>()
+                .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode())
+                .isNotNull(ServiceOrder::getGeoHash);
+        List<ServiceOrder> candidates = orderMapper.selectList(wrapper);
+
+        if (!GeoUtil.isValid(lat, lng)) {
+            // 没有坐标时退化为「全部待接单数」——比返回 0 更有参考价值
+            return candidates.size();
+        }
+        long count = 0;
+        for (ServiceOrder order : candidates) {
+            BigDecimal d = distanceToOrder(lat, lng, order);
+            // 与大厅展示口径保持一致：能算出距离的都算「附近」
+            if (d != null) {
+                count++;
+            }
+        }
+        return count;
     }
 
     @Override
@@ -523,6 +687,31 @@ public class OrderServiceImpl implements OrderService {
         return workerId == null ? null : workerService.getByUserId(workerId);
     }
 
+    /**
+     * 决定订单落库的 GeoHash（阶段 5，契约 §5.2「与 geoHash 二选一，后端可代算」）。
+     *
+     * <p>优先级：前端已算好的 {@code geoHash} > 由 {@code gpsLat}/{@code gpsLng} 代算 > 不落（null）。
+     *
+     * <p>没有定位的订单 {@code geo_hash} 为 null，会被「按距离排序」的候选查询排除——
+     * 这是刻意的：无法计算距离的订单混进距离排序里，只会得到一个位置随机的列表。
+     * 默认排序（serviceTime asc）不受影响，它们仍能被正常抢单。
+     */
+    private String resolveOrderGeoHash(CreateOrderRequest request) {
+        if (StringUtils.hasText(request.getGeoHash())) {
+            return request.getGeoHash().trim();
+        }
+        BigDecimal lat = GeoUtil.parseCoordinate(request.getGpsLat());
+        BigDecimal lng = GeoUtil.parseCoordinate(request.getGpsLng());
+        if (!GeoUtil.isValid(lat, lng)) {
+            return null;
+        }
+        // 与 §7.4 陪诊师定位同精度（6 位约 1.2km），保证两侧距离口径一致
+        return GeoUtil.geoHash(lat, lng, GEO_HASH_PRECISION);
+    }
+
+    /** GeoHash 精度（契约 §7.4 备注 1：6 位约 1.2km）；与 WorkerServiceImpl 保持一致 */
+    private static final int GEO_HASH_PRECISION = 6;
+
     /** 用户资料；userId 为空时返回 null */
     private SysUser loadUser(Long userId) {
         return userId == null ? null : userService.getById(userId);
@@ -559,6 +748,7 @@ public class OrderServiceImpl implements OrderService {
         LambdaQueryWrapper<ServiceOrder> wrapper = new LambdaQueryWrapper<ServiceOrder>()
                 .eq(ServiceOrder::getOrderStatus, OrderState.WAITING_ACCEPT.getCode());
         applyOrderFilters(wrapper, query);
+        applyMinAmount(wrapper, query);
         applySort(wrapper, query, SortWhitelist.Spec.ORDER_HALL_ASC);
         return orderMapper.selectPage(newPage(query), wrapper);
     }

@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
+import com.dsc.medipartner.common.result.SortWhitelist;
+import com.dsc.medipartner.common.util.GeoUtil;
 import com.dsc.medipartner.module.review.service.ReviewService;
 import com.dsc.medipartner.module.user.domain.dto.WorkerQuery;
 import com.dsc.medipartner.module.user.domain.enums.AuditStatusEnum;
@@ -13,11 +15,13 @@ import com.dsc.medipartner.module.user.domain.vo.WorkerCardVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerDetailVO;
 import com.dsc.medipartner.module.user.mapper.WorkerProfileMapper;
 import com.dsc.medipartner.module.user.service.WorkerBrowseService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -26,6 +30,7 @@ import java.util.List;
  * 详情不过滤，由本类按 2001（不存在）/ 2003（未过审或停用）拦截。
  * 星级分布与最近评价委托 ReviewService，冗余统计列（good_rate/avg_star）仅作列表快照。
  */
+@Slf4j
 @Service
 public class WorkerBrowseServiceImpl implements WorkerBrowseService {
 
@@ -50,11 +55,66 @@ public class WorkerBrowseServiceImpl implements WorkerBrowseService {
 
     @Override
     public IPage<WorkerCardVO> pageWorkers(WorkerQuery query) {
-        Page<WorkerBrowseRow> page = new Page<>(query.getPageNum(), query.getPageSize());
-        IPage<WorkerBrowseRow> rows = workerProfileMapper.browse(page, query);
-        Page<WorkerCardVO> result = new Page<>(rows.getCurrent(), rows.getSize(), rows.getTotal());
-        result.setRecords(rows.getRecords().stream().map(this::toCard).toList());
+        BigDecimal callerLat = GeoUtil.parseCoordinate(query.getGpsLat());
+        BigDecimal callerLng = GeoUtil.parseCoordinate(query.getGpsLng());
+        boolean hasCallerGeo = GeoUtil.isValid(callerLat, callerLng);
+        boolean sortByDistance = hasCallerGeo && "distance".equals(query.sortProperty());
+
+        if (!sortByDistance) {
+            Page<WorkerBrowseRow> page = new Page<>(query.getPageNum(), query.getPageSize());
+            IPage<WorkerBrowseRow> rows = workerProfileMapper.browse(page, query);
+            Page<WorkerCardVO> result = new Page<>(rows.getCurrent(), rows.getSize(), rows.getTotal());
+            result.setRecords(rows.getRecords().stream().map(row -> toCard(row, callerLat, callerLng)).toList());
+            return result;
+        }
+
+        // 距离排序：SQL 无法表达（库里只有坐标，没有距离列），改为取出候选后内存精算。
+        // 上限兜底同大厅：避免陪诊师数量增长后一次拉全表。
+        Page<WorkerBrowseRow> candidatePage = new Page<>(1, DISTANCE_SORT_MAX_CANDIDATES);
+        IPage<WorkerBrowseRow> rows = workerProfileMapper.browse(candidatePage, query);
+        List<WorkerBrowseRow> candidates = rows.getRecords();
+        if (candidates.size() >= DISTANCE_SORT_MAX_CANDIDATES) {
+            log.warn("[worker] 距离排序候选达到上限 {}，建议改用 GeoHash 分桶查询",
+                    DISTANCE_SORT_MAX_CANDIDATES);
+        }
+
+        // 尊重 §1.8 的 order 方向（只认 sortBy 而忽略 order 会让 desc 静默失效）
+        boolean ascending = SortWhitelist.Spec.WORKER_LIST
+                .resolve(query.getSortBy(), query.getOrder()).asc();
+        Comparator<WorkerBrowseRow> byDistance = Comparator.comparing(
+                (WorkerBrowseRow r) -> distanceTo(r, callerLat, callerLng),
+                Comparator.nullsLast(Comparator.naturalOrder()));
+        List<WorkerBrowseRow> sorted = candidates.stream()
+                .sorted((ascending ? byDistance : byDistance.reversed())
+                        // 同距离按好评率降序，再按 userId，保证顺序稳定可复现。
+                        // 这一层不随 order 反转，理由同大厅：它是确定性兜底而非用户可见语义。
+                        .thenComparing(WorkerBrowseRow::getGoodRate,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(WorkerBrowseRow::getUserId))
+                .toList();
+
+        long current = query.getPageNum();
+        long size = query.getPageSize();
+        int from = (int) Math.min((current - 1) * size, sorted.size());
+        int to = (int) Math.min(from + size, sorted.size());
+
+        Page<WorkerCardVO> result = new Page<>(current, size, sorted.size());
+        result.setRecords(sorted.subList(from, to).stream()
+                .map(row -> toCard(row, callerLat, callerLng)).toList());
         return result;
+    }
+
+    /** 距离排序的候选上限，防止陪诊师规模增长后一次拉全表 */
+    private static final int DISTANCE_SORT_MAX_CANDIDATES = 2000;
+
+    /**
+     * 陪诊师到查询者的距离（km）。
+     *
+     * <p>陪诊师未上报过定位时返回 {@code null}，排序时排到最后——
+     * 而不是当成 0（0 会被误读为「就在身边」，把没定位的人排到最前面）。
+     */
+    private BigDecimal distanceTo(WorkerBrowseRow row, BigDecimal callerLat, BigDecimal callerLng) {
+        return GeoUtil.distanceKm(callerLat, callerLng, row.getGpsLat(), row.getGpsLng());
     }
 
     @Override
@@ -85,9 +145,13 @@ public class WorkerBrowseServiceImpl implements WorkerBrowseService {
         return vo;
     }
 
-    private WorkerCardVO toCard(WorkerBrowseRow row) {
+    private WorkerCardVO toCard(WorkerBrowseRow row, BigDecimal callerLat, BigDecimal callerLng) {
         WorkerCardVO vo = new WorkerCardVO();
         fillCard(vo, row, true);
+        // 阶段 5（§6.1）：仅当查询方带了坐标才下发 distanceKm，否则键缺失
+        if (GeoUtil.isValid(callerLat, callerLng)) {
+            vo.setDistanceKm(distanceTo(row, callerLat, callerLng));
+        }
         return vo;
     }
 

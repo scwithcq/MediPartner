@@ -38,4 +38,18 @@ public interface WorkerService {
 
     /** §3.5 查询入驻申请状态；从未申请过返回 null（Controller 转成空对象 {}） */
     WorkerApplyStatusVO getApplyStatus(Long userId);
+
+    /**
+     * §7.4 上报定位（阶段 5）。
+     *
+     * <p>落 {@code worker_profile} 的 {@code gps_lat}/{@code gps_lng}/{@code geo_hash}
+     * 与 {@code geo_updated_at}。GeoHash 取前 6 位（约 1.2km 精度）仅用于<b>粗筛</b>，
+     * 真实距离由内存精算（契约 §7.4 备注 1）。
+     *
+     * @return {@code {geoHash, nearbyOrderCount}}
+     * @throws com.dsc.medipartner.common.exception.BizException
+     *         档案不存在（{@code 2001}）、坐标缺失或越界（{@code 1001}）
+     */
+    com.dsc.medipartner.module.user.domain.vo.GeoReportVO reportGeo(
+            Long workerUserId, com.dsc.medipartner.module.user.domain.dto.ReportGeoRequest request);
 }

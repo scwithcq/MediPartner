@@ -15,6 +15,10 @@ public interface WorkerProfileMapper extends BaseMapper<WorkerProfile> {
     /**
      * 陪诊师浏览列表（契约 §6.1）：只出 audit_status=PASS、sys_user.status=1、worker_profile.status=1 的人。
      * sortBy 用 choose 映射到固定列名，前端传值不参与 SQL 拼接。
+     *
+     * <p>阶段 5：额外投影 {@code gps_lat}/{@code gps_lng} 供服务层内存精算距离
+     * （{@code distance} 排序无法用 SQL 表达，见 {@code SortWhitelist.IN_MEMORY_PROPERTIES}）。
+     * 刻意<b>不</b>把坐标下发给前端——服务层算完 distanceKm 后即丢弃。
      */
     @Select("""
             <script>
@@ -23,6 +27,7 @@ public interface WorkerProfileMapper extends BaseMapper<WorkerProfile> {
                    p.credit_score AS creditScore, p.city AS city, p.service_types AS serviceTypes, p.intro AS intro,
                    p.good_rate AS goodRate, p.review_count AS reviewCount, p.service_count AS serviceCount,
                    p.avg_star AS avgStar, p.status AS status, p.updated_at AS updatedAt,
+                   p.gps_lat AS gpsLat, p.gps_lng AS gpsLng,
                    (p.id_card_no IS NOT NULL AND p.id_card_no != '') AS idCardVerified
             FROM worker_profile p
             JOIN sys_user u ON u.id = p.user_id

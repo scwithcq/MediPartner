@@ -147,7 +147,7 @@ class Stage5AuthGeoIntegrationTest {
         jdbcTemplate.update(
                 "UPDATE worker_profile SET gps_lat = ?, gps_lng = ?, geo_hash = ?, geo_updated_at = NOW() "
                         + "WHERE user_id = ?",
-                new BigDecimal("23.106590"), new BigDecimal("113.324553"), "ws10j2", userId);
+                new BigDecimal("23.106590"), new BigDecimal("113.324553"), "ws0e6y", userId);
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
                 "SELECT gps_lat, gps_lng, geo_hash FROM worker_profile WHERE user_id = ?", userId);
@@ -156,7 +156,7 @@ class Stage5AuthGeoIntegrationTest {
                 .isEqualByComparingTo("23.106590");
         assertThat(new BigDecimal(String.valueOf(row.get("gps_lng"))))
                 .isEqualByComparingTo("113.324553");
-        assertThat(row.get("geo_hash")).isEqualTo("ws10j2");
+        assertThat(row.get("geo_hash")).isEqualTo("ws0e6y");
     }
 
     // ---------------- 手机号绑定（真实唯一性） ----------------

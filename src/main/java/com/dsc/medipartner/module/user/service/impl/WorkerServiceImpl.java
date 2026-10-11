@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dsc.medipartner.common.exception.BizException;
 import com.dsc.medipartner.common.result.ErrorCode;
+import com.dsc.medipartner.common.util.GeoUtil;
 import com.dsc.medipartner.common.util.SensitiveWords;
 import com.dsc.medipartner.module.order.domain.dto.OrderQuery;
 import com.dsc.medipartner.module.order.domain.enums.ServiceType;
@@ -14,8 +15,10 @@ import com.dsc.medipartner.module.user.domain.dto.UpdateWorkerProfileRequest;
 import com.dsc.medipartner.module.user.domain.dto.WorkerApplyRequest;
 import com.dsc.medipartner.module.user.domain.entity.SysUser;
 import com.dsc.medipartner.module.user.domain.entity.WorkerProfile;
+import com.dsc.medipartner.module.user.domain.dto.ReportGeoRequest;
 import com.dsc.medipartner.module.user.domain.enums.AuditStatusEnum;
 import com.dsc.medipartner.module.user.domain.enums.CreditLevel;
+import com.dsc.medipartner.module.user.domain.vo.GeoReportVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerApplyStatusVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
@@ -48,6 +51,14 @@ public class WorkerServiceImpl implements WorkerService {
     private static final BigDecimal DEFAULT_AVG_STAR = new BigDecimal("5.0");
     private static final int DEFAULT_CREDIT = 100;
 
+    /**
+     * GeoHash 精度（契约 §7.4 备注 1）：6 位约 1.2km。
+     *
+     * <p>再长会让粗筛过严（邻格订单被滤掉，需要额外查 8 个邻格）；
+     * 再短则筛得太粗（1 位约 5000km），失去减少候选量的意义。
+     */
+    private static final int GEO_HASH_PRECISION = 6;
+
     @Value("${medi.order.max-active-orders:3}")
     private int maxActiveOrders;
     @Value("${medi.order.max-active-orders-low-credit:1}")
@@ -76,6 +87,56 @@ public class WorkerServiceImpl implements WorkerService {
     public WorkerProfile getByUserId(Long userId) {
         return workerProfileMapper.selectOne(new LambdaQueryWrapper<WorkerProfile>()
                 .eq(WorkerProfile::getUserId, userId));
+    }
+
+    // ---------------- §7.4 定位上报（阶段 5） ----------------
+
+    /**
+     * 上报定位并回写 GeoHash。
+     *
+     * <p><b>为什么必须同时存原始经纬度</b>：GeoHash 只能做前缀粗筛（前 6 位约 1.2km），
+     * 无法还原精确距离。契约 §7.4 备注 1 要求「前缀粗筛 + 内存精算距离」，
+     * 所以 {@code gps_lat}/{@code gps_lng} 才是距离计算的真正数据来源，
+     * {@code geo_hash} 只是给粗筛用的索引前缀。
+     *
+     * <p>{@code nearbyOrderCount} 委托 {@code OrderService} 计算
+     * （跨模块只调 Service，不注入对方 Mapper，手册 §3.2 铁律）。
+     */
+    @Override
+    @Transactional
+    public GeoReportVO reportGeo(Long workerUserId, ReportGeoRequest request) {
+        WorkerProfile profile = getByUserId(workerUserId);
+        if (profile == null) {
+            throw new BizException(ErrorCode.USER_NOT_FOUND, "陪诊师档案不存在，请先完成入驻");
+        }
+
+        BigDecimal lat = GeoUtil.parseCoordinate(request == null ? null : request.getGpsLat());
+        BigDecimal lng = GeoUtil.parseCoordinate(request == null ? null : request.getGpsLng());
+        if (!GeoUtil.isValid(lat, lng)) {
+            // 明确文案便于前端区分「没传」与「越界」，比通用 1001 更好排查
+            throw new BizException(ErrorCode.PARAM_ERROR,
+                    "经纬度不合法，需为合法范围内且保留 6 位小数的坐标");
+        }
+
+        String geoHash = GeoUtil.geoHash(lat, lng, GEO_HASH_PRECISION);
+        workerProfileMapper.update(null, new LambdaUpdateWrapper<WorkerProfile>()
+                .eq(WorkerProfile::getUserId, workerUserId)
+                .set(WorkerProfile::getGpsLat, lat)
+                .set(WorkerProfile::getGpsLng, lng)
+                .set(WorkerProfile::getGeoHash, geoHash)
+                .set(WorkerProfile::getGeoUpdatedAt, LocalDateTime.now()));
+
+        GeoReportVO vo = new GeoReportVO();
+        vo.setGeoHash(geoHash);
+        // 红点数：查询失败不应让上报接口整体失败（定位上报是高频心跳，
+        // 失败会导致前端反复重试）。降级为 0，前端仍可照常展示大厅。
+        try {
+            vo.setNearbyOrderCount((int) orderService.countNearbyHallOrders(workerUserId, lat, lng));
+        } catch (Exception e) {
+            log.warn("[worker] 查询附近可接单数失败，降级为 0 workerUserId={}: {}", workerUserId, e.getMessage());
+            vo.setNearbyOrderCount(0);
+        }
+        return vo;
     }
 
     // ---------------- §3.4 / §3.5 入驻申请 ----------------

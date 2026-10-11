@@ -39,4 +39,19 @@ public class OrderCardVO {
     private LocalDateTime createdAt;
     /** 最近变更时间（增量轮询依据，§1.9） */
     private LocalDateTime updatedAt;
+
+    /**
+     * 阶段 5（§7.5）：距陪诊师的距离（公里，一位小数）。
+     *
+     * <p><b>未传坐标时该键缺失</b>（保持 {@code null} 由 Jackson 的
+     * {@code NON_NULL} 策略自动省略），而不是下发 0——0 会被误读为「就在楼下」。
+     */
+    private java.math.BigDecimal distanceKm;
+
+    /**
+     * 阶段 5（§7.5）：距超时自动取消的剩余秒数，供前端做倒计时。
+     *
+     * <p>仅接单大厅下发；其它列表无此语义。
+     */
+    private Long countdownSeconds;
 }

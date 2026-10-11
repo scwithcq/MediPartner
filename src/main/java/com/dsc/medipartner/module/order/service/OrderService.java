@@ -126,4 +126,19 @@ public interface OrderService {
 
     /** 服务中且已开始超过阈值、但尚无任何留痕的订单号（用于留痕超时告警与扣分） */
     java.util.List<ServiceOrder> findOrdersMissingTrace(int limit);
+
+    // ---------------- 阶段 5：就近排序（§7.4 / §7.5 / §7.6） ----------------
+
+    /**
+     * 附近可接单数（接单大厅候选量），用于 §7.4 上报定位后刷新红点。
+     *
+     * <p>口径与大厅列表一致：状态 10、未被自己屏蔽、且在自己可服务的城市内。
+     * 距离只做<b>粗筛</b>（GeoHash 前缀 + 内存精算），不做硬性距离上限——
+     * 上限仅在抢单时校验（§7.6 的 {@code 3006}）。
+     *
+     * @param workerId 陪诊师用户 ID（用于取其服务城市与坐标）
+     * @param lat      本次上报的纬度
+     * @param lng      本次上报的经度
+     */
+    long countNearbyHallOrders(Long workerId, java.math.BigDecimal lat, java.math.BigDecimal lng);
 }

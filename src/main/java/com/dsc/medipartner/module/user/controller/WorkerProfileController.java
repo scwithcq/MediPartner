@@ -2,8 +2,10 @@ package com.dsc.medipartner.module.user.controller;
 
 import com.dsc.medipartner.common.result.R;
 import com.dsc.medipartner.common.security.UserContext;
+import com.dsc.medipartner.module.user.domain.dto.ReportGeoRequest;
 import com.dsc.medipartner.module.user.domain.dto.UpdateWorkerProfileRequest;
 import com.dsc.medipartner.module.user.domain.vo.CreditVO;
+import com.dsc.medipartner.module.user.domain.vo.GeoReportVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerOverviewVO;
 import com.dsc.medipartner.module.user.domain.vo.WorkerProfileVO;
 import com.dsc.medipartner.module.user.service.CreditService;
@@ -53,6 +55,17 @@ public class WorkerProfileController {
     @PutMapping("/profile")
     public R<WorkerProfileVO> updateProfile(@Valid @RequestBody UpdateWorkerProfileRequest request) {
         return R.ok(workerService.updateProfile(UserContext.userId(), request));
+    }
+
+    /**
+     * §7.4 上报定位（阶段 5）：工作台前台可见时每 60s 一次。
+     *
+     * <p>幂等（覆盖写）。返回 {@code nearbyOrderCount} 让前端上报后即可刷新红点，
+     * 省掉一次大厅请求（契约 §7.4 备注 2）。
+     */
+    @PutMapping("/profile/geo")
+    public R<GeoReportVO> reportGeo(@RequestBody ReportGeoRequest request) {
+        return R.ok(workerService.reportGeo(UserContext.userId(), request));
     }
 
     /** §7.17 收益概览：period 取 WEEK(默认)/MONTH/YEAR/ALL */

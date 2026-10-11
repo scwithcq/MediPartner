@@ -25,4 +25,18 @@ public class OrderQuery extends PageQuery {
 
     /** 按订单号/城市/症状关键词模糊搜索（§5.3 阶段 1.5） */
     private String keyword;
+
+    /**
+     * 阶段 5（§7.5）：陪诊师当前纬度，用于就近排序与 distanceKm。
+     *
+     * <p>可空。为空时「按距离排序」退化为默认排序，且不下发 {@code distanceKm}
+     * （契约 §7.5：未传坐标时该键缺失）。
+     */
+    private String gpsLat;
+
+    /** 阶段 5（§7.5）：陪诊师当前经度 */
+    private String gpsLng;
+
+    /** 阶段 5（§7.5）：最低客单价过滤，字符串承载以对齐契约的金额口径 */
+    private String minAmount;
 }

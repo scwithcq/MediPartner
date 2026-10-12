@@ -12,6 +12,7 @@ import com.dsc.medipartner.common.security.UserContext;
 import com.dsc.medipartner.common.util.DesensitizeUtil;
 import com.dsc.medipartner.common.util.GeoUtil;
 import com.dsc.medipartner.common.util.OrderNoGenerator;
+import com.dsc.medipartner.common.util.WatermarkTimes;
 import com.dsc.medipartner.infra.mq.ReportTaskPublisher;
 import com.dsc.medipartner.module.demand.service.DemandService;
 import com.dsc.medipartner.module.job.config.JobProperties;
@@ -31,6 +32,7 @@ import com.dsc.medipartner.module.order.domain.vo.OrderCardVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderDetailVO;
 import com.dsc.medipartner.module.order.domain.vo.OrderTimelineVO;
 import com.dsc.medipartner.module.order.domain.vo.PricePreviewVO;
+import com.dsc.medipartner.module.order.domain.vo.ReportBriefVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.ActionResolver;
 import com.dsc.medipartner.module.order.service.OrderAssembler;
@@ -92,6 +94,13 @@ public class OrderServiceImpl implements OrderService {
     private final OrderStatusLogService statusLogService;
     private final AppealService appealService;
     private final JobProperties jobProperties;
+    /**
+     * AI 报告摘要（§5.4 详情的 {@code report} 键）。
+     *
+     * <p>无需 {@code @Lazy}：ReportServiceImpl 刻意依赖 {@code ServiceOrderMapper}
+     * 而非 {@code OrderService}，因此不构成环（其 javadoc 有说明）。
+     */
+    private final com.dsc.medipartner.module.ai.service.ReportService reportService;
 
     /** 服务时间需晚于当前时间 30 分钟（契约 §5.2） */
     private static final long MIN_SERVICE_TIME_OFFSET_MINUTES = 30;
@@ -143,7 +152,8 @@ public class OrderServiceImpl implements OrderService {
                             @Lazy ReviewService reviewService, ActionResolver actionResolver,
                             OrderAssembler orderAssembler, VirtualPhoneService virtualPhoneService,
                             OrderStatusLogService statusLogService, @Lazy AppealService appealService,
-                            JobProperties jobProperties) {
+                            JobProperties jobProperties,
+                            com.dsc.medipartner.module.ai.service.ReportService reportService) {
         this.orderMapper = orderMapper;
         this.walletService = walletService;
         this.workerService = workerService;
@@ -161,6 +171,7 @@ public class OrderServiceImpl implements OrderService {
         this.statusLogService = statusLogService;
         this.appealService = appealService;
         this.jobProperties = jobProperties;
+        this.reportService = reportService;
     }
 
     @Override
@@ -454,6 +465,8 @@ public class OrderServiceImpl implements OrderService {
                 actionResolver.resolveForUser(order.getOrderStatus(), hasReview(orderNo, "USER")));
         // §5.4：详情页只带最近 5 条流转，完整列表走 §5.5
         orderAssembler.fillTimeline(vo, statusLogService.recentTimeline(order, DETAIL_TIMELINE_LIMIT));
+        // §5.4：AI 报告摘要（详情页入口角标用，正文走 §5.10）
+        vo.setReport(loadReportBrief(orderNo));
         return vo;
     }
 
@@ -466,7 +479,29 @@ public class OrderServiceImpl implements OrderService {
         OrderDetailVO vo = orderAssembler.toDetail(order, null, loadUser(order.getUserId()),
                 actionResolver.resolveForWorker(order.getOrderStatus(), hasReview(orderNo, "WORKER")));
         orderAssembler.fillTimeline(vo, statusLogService.recentTimeline(order, DETAIL_TIMELINE_LIMIT));
+        // §7.8：陪诊师侧同样下发报告摘要（只看状态不看正文，正文归求助者）
+        vo.setReport(loadReportBrief(orderNo));
         return vo;
+    }
+
+    /**
+     * 读取报告状态摘要（阶段 6 修复：此前 {@code OrderDetailVO.report} 是个从未被赋值的孤儿字段，
+     * 导致前端详情页的「AI 陪诊报告」入口卡片永不渲染）。
+     *
+     * <p>走 {@code ReportService.getReportBrief} 而非 {@code getReport}：
+     * 后者有副作用（建行 + 投递 AI 任务），而详情页是 15s 轮询的高频接口，
+     * 复用会导致「每次打开详情都触发一次 AI 生成」。
+     *
+     * <p>查询失败时返回 null 让该键缺失，不阻断整个详情——报告摘要只是入口角标，
+     * 不该因为它查不到就让用户连订单详情都看不了。
+     */
+    private ReportBriefVO loadReportBrief(String orderNo) {
+        try {
+            return reportService.getReportBrief(orderNo);
+        } catch (Exception e) {
+            log.warn("[order] 查询报告摘要失败，按无报告处理 orderNo={}: {}", orderNo, e.getMessage());
+            return null;
+        }
     }
 
     /** §5.4 timeline 字段条数上限 */
@@ -1001,6 +1036,14 @@ public class OrderServiceImpl implements OrderService {
         if (!workerId.equals(order.getWorkerId())) {
             throw new BizException(ErrorCode.ORDER_NOT_BELONG_TO_USER);
         }
+
+        // §7.11：水印时间校验（与 §7.12 /trace、§7.14 /finish 同口径，偏差 > 5 分钟抛 8004）。
+        // ⚠ 曾遗漏此处，导致陪诊师可用任意/伪造时间「开始服务」，绕过防伪造水印的风控——
+        // 三处留痕入口必须一致，否则最薄弱的那一处就是整个风控的突破口。
+        // 校验放在状态流转之前：不合格的请求不应产生任何状态副作用。
+        LocalDateTime watermarkTime = parseWatermarkTime(request.getWatermarkTime());
+        WatermarkTimes.validate(watermarkTime);
+
         stateMachineService.transition(OrderState.of(order.getOrderStatus()), OrderEvent.START);
 
         int updated = orderMapper.update(null, new LambdaUpdateWrapper<ServiceOrder>()
@@ -1019,6 +1062,28 @@ public class OrderServiceImpl implements OrderService {
         statusLogService.record(orderNo, OrderState.ACCEPTED.getCode(),
                 OrderState.IN_SERVICE.getCode(), OrderEvent.START.name(),
                 OrderStatusLogServiceImpl.OPERATOR_WORKER, workerId, remark);
+
+        // §7.11 事务与联动：带 imageUrl 时同步落「到场」首条留痕（node=ARRIVED）
+        traceService.saveArrivalTrace(orderNo, workerId, request.getImageUrl(),
+                request.getGpsLat(), request.getGpsLng(), request.getAddress(),
+                watermarkTime, request.getRemark());
+    }
+
+    /**
+     * 解析水印时间（契约统一格式 {@code yyyy-MM-dd HH:mm:ss}）。
+     *
+     * <p>空值返回 {@code null}（由 {@code WatermarkTimes.validate} 视为「不校验」）；
+     * 有值但格式错则抛 {@code 1001}，与 {@code TraceServiceImpl} 同口径。
+     */
+    private LocalDateTime parseWatermarkTime(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(text.trim(), UPDATED_SINCE_FORMAT);
+        } catch (DateTimeParseException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "watermarkTime 格式须为 yyyy-MM-dd HH:mm:ss");
+        }
     }
 
     /** 组装开始服务的日志备注：带上 GPS 与用户备注；偏离只在有 geo_hash 时做粗判 */

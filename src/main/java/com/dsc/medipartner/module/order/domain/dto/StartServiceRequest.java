@@ -34,6 +34,13 @@ public class StartServiceRequest {
     @Size(max = 255, message = "imageUrl 长度不能超过 255")
     private String imageUrl;
 
-    /** 照片水印时间，与服务器偏差 > 5 分钟返回 8004 */
+    /**
+     * 照片水印时间，与服务器偏差 &gt; 5 分钟返回 8004。
+     *
+     * <p>阶段 6 修复：此前缺 {@code @NotBlank}，且 {@code start()} 未校验该字段，
+     * 导致陪诊师可传任意/伪造时间绕过防伪造水印风控。
+     * 现与 {@code UploadTraceRequest} / {@code FinishOrderRequest} <b>三者对齐</b>。
+     */
+    @NotBlank(message = "watermarkTime 不能为空")
     private String watermarkTime;
 }

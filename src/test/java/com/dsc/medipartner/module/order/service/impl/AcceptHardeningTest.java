@@ -81,7 +81,7 @@ class AcceptHardeningTest {
                 mock(DemandService.class), mock(CreditService.class), mock(PriceService.class),
                 mock(UserService.class), mock(ReviewService.class), new ActionResolver(), new OrderAssembler(),
                 new VirtualPhoneService(), mock(OrderStatusLogService.class), mock(AppealService.class),
-                new JobProperties());
+                new JobProperties(), mock(com.dsc.medipartner.module.ai.service.ReportService.class));
         ReflectionTestUtils.setField(service, "maxActiveOrders", 3);
         ReflectionTestUtils.setField(service, "maxActiveOrdersLowCredit", 1);
         ReflectionTestUtils.setField(service, "minCreditAccept", 60);

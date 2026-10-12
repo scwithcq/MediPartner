@@ -25,4 +25,19 @@ public interface TraceService {
 
     /** 全量留痕按 seq 升序（AI 报告还原服务时间轴用） */
     List<OrderTrace> listByOrder(String orderNo);
+
+    /**
+     * 开始服务时落「到场」首条留痕（契约 §7.11「事务与联动」）。
+     *
+     * <p><b>为什么不复用 </b>{@code uploadTrace}：后者的前置校验要求订单已是「服务中」，
+     * 而本方法在 {@code 20→30} 流转<b>过程中</b>调用，此刻状态刚变更，复用会导致校验语义错位。
+     * 且到场留痕带 {@code node=ARRIVED} 语义，与过程留痕不是同一类记录。
+     *
+     * <p>水印时间由调用方（{@code OrderServiceImpl.start}）先行校验，本方法只负责落库。
+     *
+     * @param imageUrl 到场照片；<b>为空时不落留痕</b>——留痕的核心就是图片凭证，
+     *                 没有图片的记录既无法举证、又会占用每单 20 条的上限
+     */
+    void saveArrivalTrace(String orderNo, Long workerId, String imageUrl, String gpsLat, String gpsLng,
+                          String address, java.time.LocalDateTime watermarkTime, String remark);
 }

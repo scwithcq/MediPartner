@@ -19,6 +19,7 @@ import com.dsc.medipartner.module.ai.service.ReportService;
 import com.dsc.medipartner.module.order.domain.entity.OrderTrace;
 import com.dsc.medipartner.module.order.domain.entity.ServiceOrder;
 import com.dsc.medipartner.module.order.domain.enums.OrderState;
+import com.dsc.medipartner.module.order.domain.vo.ReportBriefVO;
 import com.dsc.medipartner.module.order.mapper.ServiceOrderMapper;
 import com.dsc.medipartner.module.order.service.TraceService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -238,6 +239,29 @@ public class ReportServiceImpl implements ReportService, ReportGenerateHandler {
         return reportMapper.selectOne(new LambdaQueryWrapper<AiReport>()
                 .eq(AiReport::getOrderNo, orderNo)
                 .last("LIMIT 1"));
+    }
+
+    /**
+     * 只读查询报告状态摘要（阶段 6，供 §5.4 订单详情使用）。
+     *
+     * <p><b>严格只读</b>：不建行、不投递任务、不改状态。
+     * 订单详情是被高频轮询的接口，任何写副作用都会造成
+     * 「每次打开详情都触发一次 AI 生成」的资损与状态污染。
+     */
+    @Override
+    public ReportBriefVO getReportBrief(String orderNo) {
+        if (!StringUtils.hasText(orderNo)) {
+            return null;
+        }
+        AiReport report = findByOrderNo(orderNo);
+        if (report == null) {
+            // 从未生成过：返回 null，调用方据此不下发 report 键（契约 §5.4）
+            return null;
+        }
+        ReportBriefVO brief = new ReportBriefVO();
+        brief.setStatus(report.getStatus());
+        brief.setGeneratedAt(report.getGeneratedAt());
+        return brief;
     }
 
     private ReportInput buildInput(ServiceOrder order) {

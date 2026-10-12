@@ -104,7 +104,8 @@ class OrderServiceImplTest {
         service = new OrderServiceImpl(orderMapper, walletService, workerService, stateMachineService,
                 traceService, reportTaskPublisher, demandService, creditService, priceService,
                 userService, reviewService, actionResolver, orderAssembler, new VirtualPhoneService(),
-                statusLogService, mock(AppealService.class), new JobProperties());
+                statusLogService, mock(AppealService.class), new JobProperties(),
+                mock(com.dsc.medipartner.module.ai.service.ReportService.class));
     }
 
     @AfterEach

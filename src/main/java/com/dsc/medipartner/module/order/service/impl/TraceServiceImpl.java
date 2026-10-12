@@ -112,6 +112,24 @@ public class TraceServiceImpl implements TraceService {
                 .orderByAsc(OrderTrace::getSeq));
     }
 
+    /**
+     * 开始服务时落「到场」首条留痕（契约 §7.11）。
+     *
+     * <p>无照片则不落记录：留痕的举证价值来自图片，空记录只会白占每单 20 条的上限。
+     */
+    @Override
+    @Transactional
+    public void saveArrivalTrace(String orderNo, Long workerId, String imageUrl, String gpsLat, String gpsLng,
+                                 String address, LocalDateTime watermarkTime, String remark) {
+        if (!StringUtils.hasText(imageUrl)) {
+            return;
+        }
+        OrderTrace trace = newTrace(orderNo, workerId, TraceType.TRACE, imageUrl.trim(),
+                gpsLat, gpsLng, address, watermarkTime, TraceNode.ARRIVED.name(), trimToNull(remark));
+        traceMapper.insert(trace);
+        log.info("[trace] 到场留痕已落库 orderNo={} seq={}", orderNo, trace.getSeq());
+    }
+
     private OrderTrace newTrace(String orderNo, Long workerId, TraceType type, String imageUrl,
                                 String gpsLat, String gpsLng, String address,
                                 LocalDateTime watermarkTime, String node, String remark) {

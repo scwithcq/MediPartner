@@ -71,7 +71,8 @@ class OrderPagingTest {
                 new VirtualPhoneService(),
                 mock(OrderStatusLogService.class),
                 mock(AppealService.class),
-                new JobProperties());
+                new JobProperties(),
+                mock(com.dsc.medipartner.module.ai.service.ReportService.class));
 
         if (hall) {
             service.pageHall(query);

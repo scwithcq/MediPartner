@@ -76,7 +76,7 @@ class HallDistanceSortTest {
                 mock(DemandService.class), mock(CreditService.class), mock(PriceService.class),
                 mock(UserService.class), mock(ReviewService.class), new ActionResolver(), new OrderAssembler(),
                 new VirtualPhoneService(), mock(OrderStatusLogService.class), mock(AppealService.class),
-                jobProperties);
+                jobProperties, mock(com.dsc.medipartner.module.ai.service.ReportService.class));
     }
 
     /** 造一个位于指定坐标的待接单订单（geo_hash 由坐标算出，模拟下单时后端代算的结果） */
@@ -308,7 +308,8 @@ class HallDistanceSortTest {
                 mock(OrderStateMachineService.class), mock(TraceService.class), mock(ReportTaskPublisher.class),
                 mock(DemandService.class), mock(CreditService.class), mock(PriceService.class),
                 mock(UserService.class), mock(ReviewService.class), new ActionResolver(), new OrderAssembler(),
-                new VirtualPhoneService(), mock(OrderStatusLogService.class), mock(AppealService.class), props);
+                new VirtualPhoneService(), mock(OrderStatusLogService.class), mock(AppealService.class), props,
+                mock(com.dsc.medipartner.module.ai.service.ReportService.class));
     }
 
     // ---------------- 附近可接单数 ----------------

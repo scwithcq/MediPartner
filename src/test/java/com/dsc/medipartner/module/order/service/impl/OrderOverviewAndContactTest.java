@@ -74,7 +74,8 @@ class OrderOverviewAndContactTest {
                 mock(DemandService.class), mock(CreditService.class), priceService, userService,
                 mock(ReviewService.class), new ActionResolver(), new OrderAssembler(),
                 new VirtualPhoneService(), mock(OrderStatusLogService.class),
-                mock(AppealService.class), new JobProperties());
+                mock(AppealService.class), new JobProperties(),
+                mock(com.dsc.medipartner.module.ai.service.ReportService.class));
     }
 
     private PriceResult priced() {

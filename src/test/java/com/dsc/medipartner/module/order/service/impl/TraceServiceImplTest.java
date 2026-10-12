@@ -70,6 +70,42 @@ class TraceServiceImplTest {
         return order;
     }
 
+    // ---------------- 阶段 6：开始服务的「到场」首条留痕 ----------------
+
+    /** 带图片时落一条 node=ARRIVED 的过程留痕 */
+    @Test
+    void arrivalTraceIsSavedWithArrivedNode() {
+        when(traceMapper.selectCount(any())).thenReturn(0L);
+
+        service.saveArrivalTrace(ORDER_NO, WORKER_ID, "/files/ORDER_TRACE/a.jpg",
+                "23.106590", "113.324553", "中山一院门诊大厅",
+                LocalDateTime.now(), "已接到用户");
+
+        ArgumentCaptor<OrderTrace> captor = ArgumentCaptor.forClass(OrderTrace.class);
+        verify(traceMapper).insert(captor.capture());
+        OrderTrace saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(TraceType.TRACE.name());
+        assertThat(saved.getNode()).isEqualTo("ARRIVED");
+        assertThat(saved.getImageUrl()).isEqualTo("/files/ORDER_TRACE/a.jpg");
+        assertThat(saved.getSeq()).isEqualTo(1);
+    }
+
+    /**
+     * 无图片时<b>不落库</b>。
+     *
+     * <p>理由：留痕的举证价值来自图片。空记录既无法举证，又会占用每单 20 条的上限，
+     * 让真正有用的留痕被挤掉。
+     */
+    @Test
+    void arrivalTraceIsSkippedWithoutImage() {
+        service.saveArrivalTrace(ORDER_NO, WORKER_ID, null,
+                "23.106590", "113.324553", null, LocalDateTime.now(), null);
+        service.saveArrivalTrace(ORDER_NO, WORKER_ID, "   ",
+                "23.106590", "113.324553", null, LocalDateTime.now(), null);
+
+        verify(traceMapper, never()).insert(any(OrderTrace.class));
+    }
+
     private UploadTraceRequest uploadRequest(String node, String watermarkTime) {
         UploadTraceRequest request = new UploadTraceRequest();
         request.setImageUrl("  /files/ORDER_TRACE/a.jpg  ");

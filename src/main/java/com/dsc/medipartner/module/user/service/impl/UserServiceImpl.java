@@ -20,6 +20,7 @@ import com.dsc.medipartner.module.wallet.domain.vo.WalletVO;
 import com.dsc.medipartner.module.wallet.service.WalletService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -70,10 +71,19 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public void updateProfile(Long userId, String nickname, String avatar) {
+        if (!StringUtils.hasText(nickname) && !StringUtils.hasText(avatar)) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "请填写昵称或选择头像");
+        }
+        if (nickname != null && (!StringUtils.hasText(nickname) || nickname.trim().length() > 64)) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "昵称需为 1～64 字");
+        }
+        if (avatar != null && (avatar.length() > 255 || !avatar.startsWith("/files/AVATAR/") || avatar.contains(".."))) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "请选择上传后的头像");
+        }
         LambdaUpdateWrapper<SysUser> update = new LambdaUpdateWrapper<>();
         update.eq(SysUser::getId, userId);
         if (StringUtils.hasText(nickname)) {
-            update.set(SysUser::getNickname, nickname);
+            update.set(SysUser::getNickname, nickname.trim());
         }
         if (StringUtils.hasText(avatar)) {
             update.set(SysUser::getAvatar, avatar);
@@ -124,9 +134,11 @@ public class UserServiceImpl implements UserService {
         if (existing != null && !existing.getId().equals(userId)) {
             throw new BizException(ErrorCode.PHONE_ALREADY_BOUND);
         }
-        userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
-                .eq(SysUser::getId, userId)
-                .set(SysUser::getPhone, normalized));
+        try {
+            userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                    .eq(SysUser::getId, userId)
+                    .set(SysUser::getPhone, normalized));
+        } catch (DuplicateKeyException e) { throw new BizException(ErrorCode.PHONE_ALREADY_BOUND); }
         return DesensitizeUtil.phone(normalized);
     }
 
@@ -136,10 +148,12 @@ public class UserServiceImpl implements UserService {
             return;
         }
         // 条件更新：仅当当前 phone 为空时写入，避免覆盖用户已绑定的号码
-        userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
-                .eq(SysUser::getId, userId)
-                .and(w -> w.isNull(SysUser::getPhone).or().eq(SysUser::getPhone, ""))
-                .set(SysUser::getPhone, phone.trim()));
+        try {
+            userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                    .eq(SysUser::getId, userId)
+                    .and(w -> w.isNull(SysUser::getPhone).or().eq(SysUser::getPhone, ""))
+                    .set(SysUser::getPhone, phone.trim()));
+        } catch (DuplicateKeyException e) { throw new BizException(ErrorCode.PHONE_ALREADY_BOUND); }
     }
 
     /**
@@ -151,6 +165,7 @@ public class UserServiceImpl implements UserService {
         SysUser user = getById(userId);
         UserVO vo = new UserVO();
         vo.setId(user.getId());
+        vo.setPasswordSet(StringUtils.hasText(user.getPasswordHash()));
         vo.setNickname(user.getNickname());
         vo.setAvatar(user.getAvatar());
         // §1.11：手机号一律脱敏后返回

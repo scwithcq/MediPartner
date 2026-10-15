@@ -19,6 +19,7 @@ public class LoginResponse {
 
     /** true 表示未绑手机号，前端引导到绑定页（阶段 5 起为真实值，此前恒为 false） */
     private Boolean needBindPhone;
+    private Boolean needSetPassword;
 
     /** 阶段 5（§2.1）：刷新凭据，有效期 7 天 */
     private String refreshToken;

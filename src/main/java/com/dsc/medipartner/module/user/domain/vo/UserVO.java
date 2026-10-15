@@ -16,6 +16,7 @@ public class UserVO {
 
     /** 用户 ID（雪花，JSON 里序列化为字符串） */
     private Long id;
+    private Boolean passwordSet;
     private String nickname;
     private String avatar;
     /** <b>脱敏后</b>手机号 138****1234（§1.11） */

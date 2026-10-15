@@ -14,6 +14,8 @@ public class SysUser extends BaseEntity {
     @JsonIgnore
     private String openid;
 
+    @JsonIgnore
+    private String passwordHash;
     private String phone;
     private String nickname;
     private String avatar;

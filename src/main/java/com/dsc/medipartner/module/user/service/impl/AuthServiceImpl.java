@@ -76,6 +76,7 @@ public class AuthServiceImpl implements AuthService {
         // §2.1：含 roles 与脱敏手机号（阶段 1.5 起不再出裸实体）
         response.setUserInfo(userService.getProfile(user.getId()));
         response.setNeedBindPhone(!StringUtils.hasText(user.getPhone()));
+        response.setNeedSetPassword(!StringUtils.hasText(user.getPasswordHash()));
         // §2.1 阶段 5：登录即下发 refreshToken，前端存本地用于静默续期
         response.setRefreshToken(tokenService.issueRefreshToken(user.getId()));
         response.setExpiresIn(accessExpireMinutes * 60);

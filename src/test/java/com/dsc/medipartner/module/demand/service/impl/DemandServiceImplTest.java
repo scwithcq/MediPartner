@@ -52,7 +52,7 @@ class DemandServiceImplTest {
     void setUp() {
         mapper = mock(DemandOrderMapper.class);
         objectMapper = new ObjectMapper();
-        service = new DemandServiceImpl(mapper, objectMapper);
+        service = new DemandServiceImpl(mapper, objectMapper, mock(CitationSourceResolver.class));
     }
 
     private DemandOrder order(long id, long userId, String status) {

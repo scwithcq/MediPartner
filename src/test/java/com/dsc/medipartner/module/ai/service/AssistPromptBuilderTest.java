@@ -122,6 +122,8 @@ class AssistPromptBuilderTest {
         DepartmentVO first = builder.parse(json, longHits).get(0);
         assertThat(first.getReason()).hasSize(200);
         assertThat(first.getCitations().get(0).getSliceText()).hasSize(200);
+        assertThat(first.getCitations().get(0).getFullSliceText()).isEqualTo("长".repeat(300));
+        assertThat(first.getCitations().get(0).getSliceId()).isEqualTo("s1");
     }
 
     @Test

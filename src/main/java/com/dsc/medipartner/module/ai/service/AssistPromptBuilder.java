@@ -153,6 +153,8 @@ public class AssistPromptBuilder {
             KnowledgeSearchHit hit = hits.get(i - 1);
             CitationVO citation = new CitationVO();
             citation.setDocId(hit.docId());
+            citation.setSliceId(hit.sliceId());
+            citation.setFullSliceText(hit.sliceText());
             citation.setDocTitle(hit.docTitle());
             citation.setSliceText(truncate(hit.sliceText(), SLICE_TEXT_MAX));
             citations.add(citation);

@@ -82,6 +82,8 @@ class DegradedAssistGeneratorTest {
         assertThat(result.get(0).getCitations().get(0).getDocId()).isEqualTo("d1");
         assertThat(result.get(0).getCitations().get(0).getDocTitle()).isEqualTo("陪诊服务规范");
         assertThat(result.get(0).getCitations().get(0).getSliceText()).hasSize(200);
+        assertThat(result.get(0).getCitations().get(0).getFullSliceText()).isEqualTo("长".repeat(300));
+        assertThat(result.get(0).getCitations().get(0).getSliceId()).isEqualTo("s1");
         assertThat(result.get(1).getCitations()).isEmpty();
         assertThat(result.get(2).getCitations()).isEmpty();
     }

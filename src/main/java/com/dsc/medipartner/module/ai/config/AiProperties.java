@@ -19,6 +19,15 @@ public class AiProperties {
     /** RAG 检索条数 */
     private int topK = 3;
 
+    /**
+     * 单次大模型调用的**读超时（毫秒）**。
+     *
+     * 🔴 思考型（reasoning）模型会先产出 reasoning_tokens 再输出正文，
+     * 叠加 RAG 上下文后单次调用可能超过 25s。原实现硬编码 25s 会导致
+     * `SocketTimeoutException` → 降级/6002。默认 60s。
+     */
+    private Integer readTimeoutMs = 60_000;
+
     /** 同一工单最大重新生成次数 */
     private int maxRegenerate = 5;
 

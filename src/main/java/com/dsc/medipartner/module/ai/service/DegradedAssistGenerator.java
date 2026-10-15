@@ -129,6 +129,8 @@ public class DegradedAssistGenerator {
         KnowledgeSearchHit hit = hits.get(0);
         CitationVO citation = new CitationVO();
         citation.setDocId(hit.docId());
+        citation.setSliceId(hit.sliceId());
+        citation.setFullSliceText(hit.sliceText());
         citation.setDocTitle(hit.docTitle());
         citation.setSliceText(truncate(hit.sliceText(), CITATION_TEXT_MAX));
         return List.of(citation);

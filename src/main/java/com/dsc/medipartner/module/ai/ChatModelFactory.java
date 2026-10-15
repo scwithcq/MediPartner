@@ -34,7 +34,22 @@ import org.springframework.web.client.RestClient;
 public class ChatModelFactory {
 
     private static final int CONNECT_TIMEOUT_MS = 5_000;
-    private static final int READ_TIMEOUT_MS = 25_000;
+    /**
+     * 读超时（毫秒）。
+     *
+     * 🔴 原为硬编码 25s，对**思考型（reasoning）模型**偏短：
+     * `qwen3.8-flash` 会先产出 reasoning_tokens 再输出正文，
+     * 叠加 RAG 知识库上下文后单次调用可超过 25s，实测触发
+     * `SocketTimeoutException: Read timed out` → 上层降级/报 6002。
+     *
+     * 现改为可配置（`medi.ai.read-timeout-ms`），默认 60s，便于按模型调整。
+     */
+    private static final int DEFAULT_READ_TIMEOUT_MS = 60_000;
+
+    private int readTimeoutMs() {
+        Integer configured = props.getReadTimeoutMs();
+        return (configured == null || configured <= 0) ? DEFAULT_READ_TIMEOUT_MS : configured;
+    }
 
     private final AiProperties props;
     private volatile ChatModel chatModel;
@@ -119,7 +134,7 @@ public class ChatModelFactory {
     private RestClient.Builder timedRestClientBuilder() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        factory.setReadTimeout(READ_TIMEOUT_MS);
+        factory.setReadTimeout(readTimeoutMs());
         return RestClient.builder().requestFactory(factory);
     }
 

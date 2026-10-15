@@ -31,10 +31,12 @@ public class DemandServiceImpl implements DemandService {
 
     private final DemandOrderMapper demandOrderMapper;
     private final ObjectMapper objectMapper;
+    private final CitationSourceResolver citationSourceResolver;
 
-    public DemandServiceImpl(DemandOrderMapper demandOrderMapper, ObjectMapper objectMapper) {
+    public DemandServiceImpl(DemandOrderMapper demandOrderMapper, ObjectMapper objectMapper, CitationSourceResolver citationSourceResolver) {
         this.demandOrderMapper = demandOrderMapper;
         this.objectMapper = objectMapper;
+        this.citationSourceResolver = citationSourceResolver;
     }
 
     @Override
@@ -151,6 +153,7 @@ public class DemandServiceImpl implements DemandService {
         DemandVO vo = toListVO(order);
         RecommendSnapshot snapshot = parseSnapshot(order);
         if (snapshot != null) {
+            citationSourceResolver.fillHistoricalSources(snapshot.getDepartments());
             vo.setDepartments(snapshot.getDepartments());
         }
         return vo;

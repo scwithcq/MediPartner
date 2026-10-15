@@ -27,6 +27,7 @@ import com.dsc.medipartner.module.user.service.UserService;
 import com.dsc.medipartner.module.user.service.WorkerService;
 import com.dsc.medipartner.module.wallet.domain.vo.WalletVO;
 import com.dsc.medipartner.module.wallet.service.WalletService;
+import com.dsc.medipartner.module.wallet.service.EarningService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
@@ -72,15 +73,18 @@ public class WorkerServiceImpl implements WorkerService {
     private final UserService userService;
     private final OrderService orderService;
     private final WalletService walletService;
+    private final EarningService earningService;
 
     public WorkerServiceImpl(WorkerProfileMapper workerProfileMapper,
                              @Lazy UserService userService,
                              @Lazy OrderService orderService,
-                             @Lazy WalletService walletService) {
+                             @Lazy WalletService walletService,
+                             EarningService earningService) {
         this.workerProfileMapper = workerProfileMapper;
         this.userService = userService;
         this.orderService = orderService;
         this.walletService = walletService;
+        this.earningService = earningService;
     }
 
     @Override
@@ -412,14 +416,18 @@ public class WorkerServiceImpl implements WorkerService {
         vo.setMonthOrderCount(orderService.countMonthCompleted(workerUserId));
         vo.setNewReviewCount(0L);
 
-        // 本月已结算收益与提现中金额取自钱包（V14 累计列）
+        // 与收益详情页复用自然月 INCOME 流水口径；提现中金额独立查询。
+        try {
+            vo.setMonthEarning(earningService.getMonthIncome(workerUserId));
+        } catch (Exception e) {
+            log.warn("[worker] 查询本月收益失败 workerUserId={}: {}", workerUserId, e.getMessage());
+            vo.setMonthEarning(BigDecimal.ZERO);
+        }
         try {
             WalletVO account = walletService.getAccountVO(workerUserId);
-            vo.setMonthEarning(BigDecimal.ZERO);
             vo.setPendingWithdraw(account.getWithdrawing());
         } catch (Exception e) {
             log.warn("[worker] 查询钱包失败，overview 用默认值 workerUserId={}: {}", workerUserId, e.getMessage());
-            vo.setMonthEarning(BigDecimal.ZERO);
             vo.setPendingWithdraw(BigDecimal.ZERO);
         }
 

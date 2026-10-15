@@ -1010,23 +1010,16 @@ public class OrderServiceImpl implements OrderService {
         }
     }
 
-    /** 抢单留痕备注：记录客户端点击时间与定位，供抢单争议排查（§7.6 请求体说明） */
+    /** 展示地图确认的接单地址；时间由流转记录的服务端时间统一展示。 */
     private String buildAcceptRemark(AcceptOrderRequest request) {
         if (request == null) {
             return null;
         }
-        StringBuilder sb = new StringBuilder();
-        if (StringUtils.hasText(request.getGpsLat()) && StringUtils.hasText(request.getGpsLng())) {
-            sb.append("接单位置 ").append(request.getGpsLat().trim())
-                    .append(",").append(request.getGpsLng().trim());
+        if (StringUtils.hasText(request.getAddress())) {
+            String address = request.getAddress().trim();
+            return "接单位置 " + address.substring(0, Math.min(address.length(), 200));
         }
-        if (StringUtils.hasText(request.getClientTs())) {
-            if (sb.length() > 0) {
-                sb.append("；");
-            }
-            sb.append("客户端时间 ").append(request.getClientTs().trim());
-        }
-        return sb.length() == 0 ? null : sb.toString();
+        return null;
     }
 
     @Override

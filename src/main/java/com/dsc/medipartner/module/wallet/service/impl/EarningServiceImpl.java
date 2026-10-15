@@ -66,8 +66,6 @@ public class EarningServiceImpl implements EarningService {
 
         BigDecimal periodIncome = BigDecimal.ZERO;
         long periodCount = 0L;
-        BigDecimal monthIncome = BigDecimal.ZERO;
-        LocalDateTime startOfMonth = LocalDate.now().withDayOfMonth(1).atStartOfDay();
         // 曲线按桶累计：WEEK/MONTH 按天，YEAR 按月
         Map<String, BigDecimal> bucketAmount = new LinkedHashMap<>();
         Map<String, Long> bucketCount = new LinkedHashMap<>();
@@ -77,9 +75,6 @@ public class EarningServiceImpl implements EarningService {
             LocalDateTime at = txn.getCreatedAt();
             if (at == null) {
                 continue;
-            }
-            if (!at.isBefore(startOfMonth)) {
-                monthIncome = monthIncome.add(nz(txn.getAmount()));
             }
             if (range.start != null && at.isBefore(range.start)) {
                 continue;
@@ -92,7 +87,7 @@ public class EarningServiceImpl implements EarningService {
         }
 
         vo.setPeriodIncome(periodIncome);
-        vo.setMonthIncome(monthIncome);
+        vo.setMonthIncome(sumMonthIncome(allIncome, LocalDate.now()));
         vo.setOrderCount(periodCount);
         // 单均收益 = 周期收益 / 周期单数；无单时为 0.00
         vo.setAvgIncome(periodCount == 0
@@ -106,6 +101,30 @@ public class EarningServiceImpl implements EarningService {
         vo.setChart(buildChart(range, bucketAmount, bucketCount));
         vo.setRecentTxns(loadRecentTxns(workerId, txnPageNum, txnPageSize));
         return vo;
+    }
+
+    @Override
+    public BigDecimal getMonthIncome(Long workerId) {
+        LocalDate month = LocalDate.now().withDayOfMonth(1);
+        List<WalletTransaction> income = txnMapper.selectList(new LambdaQueryWrapper<WalletTransaction>()
+                .eq(WalletTransaction::getUserId, workerId)
+                .eq(WalletTransaction::getType, TxnTypeEnum.INCOME.name())
+                .ge(WalletTransaction::getCreatedAt, month.atStartOfDay())
+                .lt(WalletTransaction::getCreatedAt, month.plusMonths(1).atStartOfDay()));
+        return sumMonthIncome(income, month);
+    }
+
+    private BigDecimal sumMonthIncome(List<WalletTransaction> income, LocalDate today) {
+        LocalDateTime start = today.withDayOfMonth(1).atStartOfDay();
+        LocalDateTime end = start.plusMonths(1);
+        BigDecimal total = BigDecimal.ZERO;
+        for (WalletTransaction txn : income) {
+            LocalDateTime at = txn.getCreatedAt();
+            if (at != null && !at.isBefore(start) && at.isBefore(end)) {
+                total = total.add(nz(txn.getAmount()));
+            }
+        }
+        return total;
     }
 
     /**

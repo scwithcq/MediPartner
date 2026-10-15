@@ -40,6 +40,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.verify;
 
 /**
  * 抢单加固测试（阶段 5，契约 §7.6）。
@@ -217,6 +220,27 @@ class AcceptHardeningTest {
     }
 
     // ---------------- 3007 服务时间可达性 ----------------
+
+    @Test
+    void acceptedOrderRecordsDistrictAddressWithoutClientTimestamp() {
+        ServiceOrder order = waiting(GeoUtil.geoHash(GZ_LAT, GZ_LNG, 6), LocalDateTime.now().plusHours(3));
+        when(orderMapper.selectOne(any())).thenReturn(order);
+        when(orderMapper.update(any(), any())).thenReturn(1);
+        OrderStatusLogService logs = mock(OrderStatusLogService.class);
+        ReflectionTestUtils.setField(service, "statusLogService", logs);
+        service = spy(service);
+        doReturn(new com.dsc.medipartner.module.order.domain.vo.OrderDetailVO())
+                .when(service).getWorkerOrderDetail(WORKER_ID, ORDER_NO);
+        AcceptOrderRequest request = reqAt("23.106590", "113.324553");
+        request.setAddress("广东省广州市从化区街口街道");
+        request.setClientTs("1791978712644");
+
+        service.accept(WORKER_ID, ORDER_NO, request);
+
+        verify(logs).record(ORDER_NO, OrderState.WAITING_ACCEPT.getCode(), OrderState.ACCEPTED.getCode(),
+                "ACCEPT", OrderStatusLogServiceImpl.OPERATOR_WORKER, WORKER_ID,
+                "接单位置 广东省广州市从化区街口街道");
+    }
 
     /** 服务时间已过必须抛 {@code 3007} */
     @Test

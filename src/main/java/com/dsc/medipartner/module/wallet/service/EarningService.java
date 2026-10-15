@@ -1,6 +1,7 @@
 package com.dsc.medipartner.module.wallet.service;
 
 import com.dsc.medipartner.module.wallet.domain.vo.EarningVO;
+import java.math.BigDecimal;
 
 /**
  * 收益概览（契约 §7.17）。
@@ -16,4 +17,7 @@ public interface EarningService {
      * @param txnPageSize 最近流水每页条数
      */
     EarningVO getEarning(Long workerId, String period, long txnPageNum, long txnPageSize);
+
+    /** 当前自然月的已结算 INCOME 流水合计，与收益详情页使用相同统计口径。 */
+    BigDecimal getMonthIncome(Long workerId);
 }

@@ -18,6 +18,9 @@ public class AcceptOrderRequest {
     /** 抢单时的实时定位经度 */
     private String gpsLng;
 
+    /** 微信地图确认的省市区及详细地址，用于流转记录展示。 */
+    private String address;
+
     /** 客户端点击时间 {@code yyyy-MM-dd HH:mm:ss}，排查抢单争议用 */
     private String clientTs;
 }

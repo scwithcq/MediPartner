@@ -20,6 +20,7 @@ public enum ErrorCode {
     SMS_CODE_INVALID(2004, "验证码错误或已过期"),
     /** 附录 B.2 预留：登录时账号被禁用（阶段 7 管理端停用账号后生效） */
     USER_DISABLED(2005, "账号已被禁用，请联系客服"),
+    LOGIN_PASSWORD_INVALID(2006, "手机号或密码不正确"),
 
     ORDER_NOT_FOUND(3001, "订单不存在"),
     ORDER_STATE_ILLEGAL(3002, "订单状态不允许该操作"),
@@ -51,6 +52,8 @@ public enum ErrorCode {
     DOC_PARSE_FAILED(6003, "文档解析失败"),
     REPORT_PROCESSING(6004, "AI 报告生成中，请稍后刷新"),
     DEMAND_CLOSED(6005, "该需求工单已关闭，请重新发起"),
+
+    CHAT_SENSITIVE_CONFIRM(7001, "消息包含联系方式或证件信息，请确认后发送"),
 
     FILE_EMPTY(8001, "上传文件为空"),
     FILE_TYPE_NOT_SUPPORT(8002, "不支持的文件类型"),

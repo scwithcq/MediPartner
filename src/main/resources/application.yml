@@ -132,22 +132,41 @@ medi:
     split-max-chars: 500
     split-overlap: 50
   ai:
-    # 模型厂商：deepseek（默认，DeepSeek 官方 OpenAI 兼容模式，无 Embedding 接口时检索降级关键词打分）
-    #          / qwen（DashScope OpenAI 兼容模式）/ zhipu（智谱原生）
-    provider: ${MEDI_AI_PROVIDER:deepseek}
+    # 模型厂商：qwen（阿里云百炼 MaaS，OpenAI 兼容模式，默认启用）/ deepseek（DeepSeek 官方）
+    #          / zhipu（智谱原生）
+    provider: ${MEDI_AI_PROVIDER:qwen}
     top-k: 3
     max-regenerate: 5
+    # 单次大模型调用读超时（毫秒）。思考型模型 + RAG 上下文可能超过 25s，故默认 60s
+    read-timeout-ms: ${MEDI_AI_READ_TIMEOUT_MS:60000}
     deepseek:
       base-url: https://api.deepseek.com
       # DeepSeek 官方平台 Key；复用用户环境变量 SILICONFLOW_API_KEY，可用 MEDI_AI_DEEPSEEK_API_KEY 覆盖
       api-key: ${MEDI_AI_DEEPSEEK_API_KEY:${SILICONFLOW_API_KEY:}}
       chat-model: deepseek-flash
       temperature: 0.3
+    # ---------------------------------------------------------------------
+    # 阿里云百炼 MaaS（华北2·北京 业务空间）—— 当前启用
+    #
+    # 🔴 base-url 必须带 `/compatible-mode` 后缀：
+    #    代码里 OpenAiApi 固定拼 `/v1/chat/completions`、`/v1/embeddings`，
+    #    而该网关的 OpenAI 兼容入口就在 /compatible-mode 下。
+    #    若只写到域名，请求会打到 `<域名>/v1/chat/completions` → 404。
+    #
+    # 🔴 chat-model 用 `qwen3.8-flash`，**不要**用模型列表里的 `cmaas-qwen3.8-flash`：
+    #    后者能列出但调用返回 400 InvalidParameter（实测）。
+    #
+    # ⚡ 模型选型（实测，同一提示词 + RAG + 3 科室 JSON）：
+    #    qwen3.8-flash（思考型）  平均 35.8s，带 100~400 reasoning_tokens，质量略好
+    #    qwen-flash      （非思考）平均  2.4s，15x 更快，科室数/质量同样达标
+    #    默认取 qwen-flash：本接口是"用户等结果"的交互场景，2.4s 体验远好于 36s。
+    #    想要更强推理可临时覆盖：MEDI_AI_QWEN_CHAT_MODEL=qwen3.8-flash
+    # ---------------------------------------------------------------------
     qwen:
-      base-url: https://dashscope.aliyuncs.com/compatible-mode
-      # API Key 只从环境变量注入，禁止写死
-      api-key: ${MEDI_AI_QWEN_API_KEY:}
-      chat-model: qwen-plus
+      base-url: ${MEDI_AI_QWEN_BASE_URL:https://llm-hk0mron8vafpfnpu.cn-beijing.maas.aliyuncs.com/compatible-mode}
+      # 🔴 Key 只从环境变量注入，禁止写死。当前取自用户环境变量 DASHSCOPE_API_KEY
+      api-key: ${MEDI_AI_QWEN_API_KEY:${DASHSCOPE_API_KEY:}}
+      chat-model: ${MEDI_AI_QWEN_CHAT_MODEL:qwen-flash}
       embedding-model: text-embedding-v4
       embedding-dimensions: 1024
       temperature: 0.3
